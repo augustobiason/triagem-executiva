@@ -1,0 +1,2117 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Triagem Executiva — Gestão de Demandas Corporativas</title>
+    <meta
+      name="description"
+      content="Painel executivo de triagem de e-mails corporativos integrado ao Gmail e Planilha Google via Google Apps Script."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['"DM Sans"', "ui-sans-serif", "system-ui", "sans-serif"],
+              display: ['"Plus Jakarta Sans"', '"DM Sans"', "ui-sans-serif", "system-ui", "sans-serif"],
+              mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
+            },
+          },
+        },
+      };
+    </script>
+    <script src="https://unpkg.com/lucide@0.546.0/dist/umd/lucide.min.js"></script>
+    <style>
+      body {
+        font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .font-display {
+        font-family: "Plus Jakarta Sans", "DM Sans", ui-sans-serif, system-ui, sans-serif;
+      }
+      .font-mono {
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+      }
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-900 antialiased">
+    <div id="app" class="min-h-screen flex bg-slate-50 text-slate-900"></div>
+
+    <script>
+      (() => {
+        const API_URL =
+          "https://script.google.com/macros/s/AKfycbw1DQJVPXCKh6n-wi_xtwK0IvUOBVEcYMMf2ppgx81MESumH3Yj-K9G7ICRLwsN3AtuFA/exec";
+
+        const DEFAULT_CATEGORIES = [
+          "Redação",
+          "Revisão",
+          "Reunião",
+          "Administrativo",
+          "Outro",
+        ];
+
+        const DEFAULT_RULES = [
+          {
+            id: "rule-juridico",
+            ativo: true,
+            matchType: "dominio",
+            matchValue: "@machadoassociados.com.br",
+            rotulo: "Jurídico Externo",
+            categoria: "Revisão",
+          },
+          {
+            id: "rule-diretoria",
+            ativo: true,
+            matchType: "nome",
+            matchValue: "Diretoria Executiva",
+            rotulo: "Diretoria",
+            categoria: "Reunião",
+          },
+          {
+            id: "rule-financeiro",
+            ativo: true,
+            matchType: "conteudo",
+            matchValue: "nota fiscal",
+            rotulo: "Financeiro",
+            categoria: "Administrativo",
+          },
+        ];
+
+        const TASK_STATUS_OPTIONS = [
+          "A Fazer",
+          "Iniciado",
+          "Aguardando",
+          "Concluído",
+        ];
+
+        const STATUS_FILTER_OPTIONS = ["Todos", ...TASK_STATUS_OPTIONS];
+
+        const MATCH_TYPE_LABELS = {
+          email: "E-mail do solicitante",
+          dominio: "Domínio (@empresa)",
+          nome: "Nome do solicitante",
+          conteudo: "Assunto ou conteúdo",
+        };
+
+        const PT_BR_MONTHS_SHORT = [
+          "jan",
+          "fev",
+          "mar",
+          "abr",
+          "mai",
+          "jun",
+          "jul",
+          "ago",
+          "set",
+          "out",
+          "nov",
+          "dez",
+        ];
+
+        const STORAGE_CATEGORIES_KEY = "triagem_executiva_categories_v1";
+
+        function loadStoredCategories() {
+          try {
+            const raw = localStorage.getItem(STORAGE_CATEGORIES_KEY);
+            if (!raw) return [...DEFAULT_CATEGORIES];
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) && parsed.length > 0
+              ? parsed.map((c) => String(c))
+              : [...DEFAULT_CATEGORIES];
+          } catch {
+            return [...DEFAULT_CATEGORIES];
+          }
+        }
+
+        function saveStoredCategories(cats) {
+          try {
+            localStorage.setItem(STORAGE_CATEGORIES_KEY, JSON.stringify(cats));
+          } catch {
+            // Ignore storage errors
+          }
+        }
+
+        function uuid() {
+          if (window.crypto && typeof window.crypto.randomUUID === "function") {
+            return window.crypto.randomUUID();
+          }
+          return "id-" + Math.random().toString(36).slice(2) + "-" + Date.now().toString(36);
+        }
+
+        function escapeHtml(value) {
+          return String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        function normalizeEmailSubject(subject) {
+          if (!subject) return "";
+          let cleaned = String(subject).trim();
+          const prefixPattern =
+            /^(?:\[\s*)?(?:res|re|enc|fwd|fw|rv|tr)\s*(?:\[\d+\])?\s*[:\-]\s*/i;
+          while (prefixPattern.test(cleaned)) {
+            cleaned = cleaned.replace(prefixPattern, "").trim();
+          }
+          return cleaned.replace(/\s+/g, " ").trim();
+        }
+
+        function formatDisplayDate(isoDate, emptyFallback = "Sem prazo") {
+          if (!isoDate) return emptyFallback;
+          const trimmed = String(isoDate).trim();
+          if (!trimmed) return emptyFallback;
+
+          const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
+          if (!match) return trimmed;
+
+          const year = Number(match[1]);
+          const monthIndex = Number(match[2]) - 1;
+          const day = Number(match[3]);
+          if (
+            Number.isNaN(year) ||
+            Number.isNaN(monthIndex) ||
+            Number.isNaN(day) ||
+            monthIndex < 0 ||
+            monthIndex > 11 ||
+            day < 1 ||
+            day > 31
+          ) {
+            return trimmed;
+          }
+
+          const dd = String(day).padStart(2, "0");
+          const currentYear = new Date().getFullYear();
+          if (year === currentYear) {
+            return `${dd}/${PT_BR_MONTHS_SHORT[monthIndex]}`;
+          }
+          const mm = String(monthIndex + 1).padStart(2, "0");
+          return `${dd}/${mm}/${year}`;
+        }
+
+        function formatReceivedDateTime(isoDateTime, fallbackDate, emptyFallback = "Sem data") {
+          const source = String(isoDateTime || fallbackDate || "").trim();
+          if (!source) return emptyFallback;
+
+          const match = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2}))?/.exec(source);
+          if (!match) return source;
+
+          const year = Number(match[1]);
+          const monthIndex = Number(match[2]) - 1;
+          const day = Number(match[3]);
+          const hour = match[4];
+          const minute = match[5];
+
+          if (
+            Number.isNaN(year) ||
+            Number.isNaN(monthIndex) ||
+            Number.isNaN(day) ||
+            monthIndex < 0 ||
+            monthIndex > 11 ||
+            day < 1 ||
+            day > 31
+          ) {
+            return source;
+          }
+
+          const dd = String(day).padStart(2, "0");
+          const mmm = PT_BR_MONTHS_SHORT[monthIndex];
+          const currentYear = new Date().getFullYear();
+          const datePart = year === currentYear ? `${dd}/${mmm}` : `${dd}/${mmm}/${year}`;
+
+          if (hour !== undefined && minute !== undefined) {
+            return `${datePart} às ${hour}:${minute}`;
+          }
+          return datePart;
+        }
+
+        function getNowIsoDateTime() {
+          const now = new Date();
+          const yyyy = now.getFullYear();
+          const mm = String(now.getMonth() + 1).padStart(2, "0");
+          const dd = String(now.getDate()).padStart(2, "0");
+          const hh = String(now.getHours()).padStart(2, "0");
+          const min = String(now.getMinutes()).padStart(2, "0");
+          return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+        }
+
+        function formatCurrentTime() {
+          const now = new Date();
+          return `${String(now.getHours()).padStart(2, "0")}:${String(
+            now.getMinutes()
+          ).padStart(2, "0")}`;
+        }
+
+        function normalizeUrgency(value) {
+          const s = String(value ?? "").trim().toLowerCase();
+          if (s === "alta") return "Alta";
+          if (s === "média" || s === "media") return "Média";
+          return "Baixa";
+        }
+
+        function normalizeStatus(value, completed) {
+          const s = String(value ?? "").trim().toLowerCase();
+          if (s === "iniciado") return "Iniciado";
+          if (s === "aguardando") return "Aguardando";
+          if (s === "concluído" || s === "concluido") return "Concluído";
+          if (s === "a fazer") return "A Fazer";
+          return completed === true ? "Concluído" : "A Fazer";
+        }
+
+        function normalizeIsoDate(value) {
+          if (value === null || value === undefined) return null;
+          const text = String(value).trim();
+          if (!text || text.toLowerCase() === "null" || text === "—") return null;
+
+          const isoMatch = /^(\d{4}-\d{2}-\d{2})/.exec(text);
+          if (isoMatch) return isoMatch[1];
+
+          const brMatch = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(text);
+          if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
+          return null;
+        }
+
+        function normalizeIsoDateTime(value, fallbackDate) {
+          if (value === null || value === undefined) return fallbackDate;
+          const text = String(value).trim();
+          if (!text || text.toLowerCase() === "null") return fallbackDate;
+          const isoMatch = /^(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}:\d{2}))?/.exec(text);
+          if (isoMatch) {
+            return isoMatch[2] ? `${isoMatch[1]} ${isoMatch[2]}` : isoMatch[1];
+          }
+          return fallbackDate;
+        }
+
+        function parseThreadHistory(
+          rawHistory,
+          fallbackSenderName,
+          fallbackSenderEmail,
+          fallbackDateTime,
+          fallbackSummary,
+          taskId
+        ) {
+          let parsedList = [];
+          if (Array.isArray(rawHistory)) {
+            parsedList = rawHistory;
+          } else if (typeof rawHistory === "string" && rawHistory.trim().startsWith("[")) {
+            try {
+              const parsed = JSON.parse(rawHistory);
+              if (Array.isArray(parsed)) parsedList = parsed;
+            } catch {
+              parsedList = [];
+            }
+          }
+
+          const normalized = parsedList
+            .map((item, idx) => {
+              const obj = item || {};
+              const dataHora = normalizeIsoDateTime(
+                obj.data_hora ?? obj.dataHora ?? obj.data,
+                fallbackDateTime
+              );
+              return {
+                id: String(obj.id ?? `msg-${taskId}-${idx}`),
+                remetente_nome:
+                  String(obj.remetente_nome ?? obj.remetente ?? fallbackSenderName).trim() ||
+                  fallbackSenderName,
+                remetente_email: String(obj.remetente_email ?? obj.email ?? "").trim(),
+                data_hora: dataHora,
+                resumo: String(obj.resumo ?? obj.conteudo ?? obj.mensagem ?? "").trim(),
+              };
+            })
+            .filter((m) => m.resumo.length > 0);
+
+          if (normalized.length === 0 && fallbackSummary) {
+            normalized.push({
+              id: `msg-${taskId}-0`,
+              remetente_nome: fallbackSenderName || "Remetente",
+              remetente_email: fallbackSenderEmail,
+              data_hora: fallbackDateTime,
+              resumo: fallbackSummary,
+            });
+          }
+          return normalized.sort((a, b) => a.data_hora.localeCompare(b.data_hora));
+        }
+
+        function normalizeTask(raw, index) {
+          const r = raw || {};
+          const id = String(r.id ?? `demanda-${index}-${uuid()}`);
+          const status = normalizeStatus(r.status, r.completed);
+          const solicitanteNome = String(r.solicitante_nome ?? r.solicitante ?? "Solicitante").trim();
+          const solicitanteEmail = String(r.solicitante_email ?? r.email ?? "").trim();
+          const dataOriginal = normalizeIsoDate(r.data_email_original ?? r.data_recebimento) || "";
+          const dataHoraOriginal = normalizeIsoDateTime(
+            r.data_hora_email_original ?? r.data_hora_recebimento ?? r.data_email_original,
+            dataOriginal
+          );
+          const titulo = String(r.titulo ?? "Demanda sem título").trim();
+          const descricao = String(r.descricao ?? "").trim();
+          const assuntoLimpo =
+            normalizeEmailSubject(String(r.assunto_original ?? r.assunto ?? "")) || "Sem assunto";
+
+          const historico_mensagens = parseThreadHistory(
+            r.historico_mensagens,
+            solicitanteNome,
+            solicitanteEmail,
+            dataHoraOriginal,
+            descricao || titulo,
+            id
+          );
+
+          return {
+            id,
+            triageId: String(r.triageId ?? r.thread_id ?? "gmail"),
+            titulo,
+            descricao,
+            prazo: normalizeIsoDate(r.prazo),
+            prazo_texto_original: r.prazo_texto_original
+              ? String(r.prazo_texto_original).trim()
+              : null,
+            urgencia: normalizeUrgency(r.urgencia),
+            categoria: String(r.categoria ?? "Outro").trim() || "Outro",
+            assunto_original: assuntoLimpo,
+            solicitante_nome: solicitanteNome,
+            solicitante_email: solicitanteEmail,
+            data_email_original: dataOriginal || dataHoraOriginal.slice(0, 10),
+            data_hora_email_original: dataHoraOriginal,
+            rotulo_aplicado: String(r.rotulo_aplicado ?? r.rotulo ?? "Geral").trim() || "Geral",
+            regra_acionada: Boolean(r.regra_acionada ?? false),
+            status,
+            statusNote: String(r.statusNote ?? r.observacao_status ?? "").trim() || undefined,
+            observacoes: String(r.observacoes ?? "").trim() || undefined,
+            hasNewMessage: Boolean(r.hasNewMessage ?? r.nova_mensagem ?? false),
+            historico_mensagens,
+            completed: status === "Concluído",
+            completedAt: r.completedAt ? String(r.completedAt) : undefined,
+          };
+        }
+
+        function normalizeMatchType(value) {
+          const s = String(value ?? "").trim().toLowerCase();
+          if (s === "email" || s === "e-mail") return "email";
+          if (s === "dominio" || s === "domínio") return "dominio";
+          if (s === "nome") return "nome";
+          return "conteudo";
+        }
+
+        function normalizeRule(raw, index) {
+          const r = raw || {};
+          return {
+            id: String(r.id ?? `rule-${index}-${uuid()}`),
+            ativo: r.ativo !== false && r.ativa !== false && r.ativo !== "false",
+            matchType: normalizeMatchType(r.matchType ?? r.criterio),
+            matchValue: String(r.matchValue ?? r.valor ?? "").trim(),
+            rotulo: String(r.rotulo ?? "Geral").trim(),
+            categoria: String(r.categoria ?? "Outro").trim() || "Outro",
+          };
+        }
+
+        function extractPayload(json) {
+          const root = json || {};
+          const container = root.data && typeof root.data === "object" ? root.data : root;
+          if (container.erro || container.error) {
+            throw new Error(String(container.erro ?? container.error));
+          }
+
+          const rawDemandas = Array.isArray(container.demandas) ? container.demandas : [];
+          const rawRegras = Array.isArray(container.regras) ? container.regras : [];
+          const rawCategorias = Array.isArray(container.categorias)
+            ? container.categorias.map((c) => String(c ?? "").trim()).filter(Boolean)
+            : [];
+
+          return {
+            demandas: rawDemandas.map((item, idx) => normalizeTask(item, idx)),
+            regras: rawRegras
+              .map((item, idx) => normalizeRule(item, idx))
+              .filter((r) => r.matchValue.length > 0 && r.rotulo.length > 0),
+            categorias: rawCategorias,
+          };
+        }
+
+        async function fetchInitialFromGas() {
+          const res = await fetch(`${API_URL}?acao=listar`, {
+            method: "GET",
+            redirect: "follow",
+          });
+          if (!res.ok) {
+            throw new Error(`Erro HTTP ${res.status} ao carregar dados da planilha.`);
+          }
+          return extractPayload(await res.json());
+        }
+
+        async function syncEmailsFromGas() {
+          const res = await fetch(`${API_URL}?acao=sincronizar`, {
+            method: "GET",
+            redirect: "follow",
+          });
+          if (!res.ok) {
+            throw new Error(`Erro HTTP ${res.status} ao sincronizar e-mails do Gmail.`);
+          }
+          return extractPayload(await res.json());
+        }
+
+        async function postUpdateDemandToGas(demanda) {
+          const res = await fetch(API_URL, {
+            method: "POST",
+            redirect: "follow",
+            headers: {
+              "Content-Type": "text/plain;charset=utf-8",
+            },
+            body: JSON.stringify({
+              acao: "atualizar_demanda",
+              demanda,
+            }),
+          });
+          if (!res.ok) {
+            throw new Error(`Erro HTTP ${res.status} ao salvar demanda na planilha.`);
+          }
+          const text = await res.text();
+          if (text.trim().startsWith("{")) {
+            const parsed = JSON.parse(text);
+            if (parsed.erro || parsed.error) {
+              throw new Error(String(parsed.erro ?? parsed.error));
+            }
+          }
+        }
+
+        async function postSaveRulesToGas(regras) {
+          const res = await fetch(API_URL, {
+            method: "POST",
+            redirect: "follow",
+            headers: {
+              "Content-Type": "text/plain;charset=utf-8",
+            },
+            body: JSON.stringify({
+              acao: "salvar_regras",
+              regras,
+            }),
+          });
+          if (!res.ok) {
+            throw new Error(`Erro HTTP ${res.status} ao salvar regras na planilha.`);
+          }
+          const text = await res.text();
+          if (text.trim().startsWith("{")) {
+            const parsed = JSON.parse(text);
+            if (parsed.erro || parsed.error) {
+              throw new Error(String(parsed.erro ?? parsed.error));
+            }
+          }
+        }
+
+        const state = {
+          view: "tasks",
+          mobileMenuOpen: false,
+          tasks: [],
+          rules: [],
+          categories: loadStoredCategories(),
+          isInitialLoading: true,
+          isSyncing: false,
+          isSaving: false,
+          syncFeedback: null,
+          apiError: null,
+          search: "",
+          statusFilter: "Todos",
+          urgencyFilter: "Todas",
+          editingObsTaskId: null,
+          obsDraft: "",
+          expandedThreads: {},
+          modalTask: null,
+          modalMode: "edit",
+          modalShowHistory: false,
+          editingRuleId: null,
+          editRuleDraft: null,
+          ruleFormMatchType: "dominio",
+          ruleFormMatchValue: "",
+          ruleFormRotulo: "",
+          ruleFormCategoria: "Outro",
+          newCategoryInput: "",
+        };
+
+        function mergeCategoryLists(base, incoming, rules, tasks) {
+          const set = new Set(base);
+          for (const c of incoming) if (c.trim()) set.add(c.trim());
+          for (const r of rules) if (r.categoria && r.categoria.trim()) set.add(r.categoria.trim());
+          for (const t of tasks) if (t.categoria && t.categoria.trim()) set.add(t.categoria.trim());
+          return Array.from(set);
+        }
+
+        function applyGasPayload(payload) {
+          state.tasks = payload.demandas;
+          state.rules = payload.regras;
+          state.categories = mergeCategoryLists(
+            state.categories.length > 0 ? state.categories : DEFAULT_CATEGORIES,
+            payload.categorias,
+            payload.regras,
+            payload.demandas
+          );
+          saveStoredCategories(state.categories);
+          if (!state.categories.includes(state.ruleFormCategoria)) {
+            state.ruleFormCategoria = state.categories[0] || "Outro";
+          }
+        }
+
+        function getAvailableLabels() {
+          const set = new Set(["Geral"]);
+          for (const r of state.rules) if (r.rotulo.trim()) set.add(r.rotulo.trim());
+          for (const t of state.tasks) if (t.rotulo_aplicado && t.rotulo_aplicado.trim()) set.add(t.rotulo_aplicado.trim());
+          return Array.from(set);
+        }
+
+        function getFilteredTasks() {
+          const q = state.search.trim().toLowerCase();
+          return state.tasks.filter((task) => {
+            const currentStatus = task.status ?? (task.completed ? "Concluído" : "A Fazer");
+            if (state.statusFilter !== "Todos" && currentStatus !== state.statusFilter) return false;
+            if (state.urgencyFilter !== "Todas" && task.urgencia !== state.urgencyFilter) return false;
+            if (q) {
+              const historyText = (task.historico_mensagens || [])
+                .map((m) => `${m.remetente_nome} ${m.resumo}`)
+                .join(" ");
+              const haystack = [
+                task.titulo,
+                task.descricao,
+                task.assunto_original,
+                task.solicitante_nome,
+                task.solicitante_email,
+                task.categoria,
+                task.rotulo_aplicado || "",
+                task.statusNote || "",
+                task.observacoes || "",
+                historyText,
+              ]
+                .join(" ")
+                .toLowerCase();
+              if (!haystack.includes(q)) return false;
+            }
+            return true;
+          });
+        }
+
+        function renderStatusBadge(status) {
+          const configs = {
+            "A Fazer": {
+              icon: "circle",
+              classes: "bg-slate-100 text-slate-700 border-slate-200",
+            },
+            Iniciado: {
+              icon: "play-circle",
+              classes: "bg-blue-50 text-blue-700 border-blue-200",
+            },
+            Aguardando: {
+              icon: "clock",
+              classes: "bg-amber-50 text-amber-800 border-amber-200",
+            },
+            Concluído: {
+              icon: "check-circle-2",
+              classes: "bg-emerald-50 text-emerald-700 border-emerald-200",
+            },
+          };
+          const cfg = configs[status] || configs["A Fazer"];
+          return `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded-md border whitespace-nowrap shrink-0 ${cfg.classes}">
+            <i data-lucide="${cfg.icon}" class="w-3.5 h-3.5 shrink-0"></i>
+            <span>${escapeHtml(status)}</span>
+          </span>`;
+        }
+
+        function renderUrgencyIndicator(level) {
+          const configs = {
+            Alta: { text: "text-red-700", dot: "bg-red-600" },
+            Média: { text: "text-amber-700", dot: "bg-amber-500" },
+            Baixa: { text: "text-slate-600", dot: "bg-slate-400" },
+          };
+          const cfg = configs[level] || configs["Baixa"];
+          return `<span class="inline-flex items-center gap-1.5 text-xs font-medium whitespace-nowrap ${cfg.text}">
+            <span class="w-2 h-2 rounded-full ${cfg.dot}"></span>
+            <span>${escapeHtml(level)}</span>
+          </span>`;
+        }
+
+        function renderSidebar() {
+          const pendingCount = state.tasks.filter((t) => t.status !== "Concluído").length;
+          const highCount = state.tasks.filter((t) => t.status !== "Concluído" && t.urgencia === "Alta").length;
+          const waitingCount = state.tasks.filter((t) => t.status === "Aguardando").length;
+          const unreadCount = state.tasks.filter((t) => t.hasNewMessage).length;
+          const activeRulesCount = state.rules.filter((r) => r.ativo).length;
+
+          return `
+            <div class="flex flex-col h-full justify-between p-4">
+              <div>
+                <div class="px-2 py-2 mb-6">
+                  <span class="font-display text-base font-bold tracking-tight text-slate-900 whitespace-nowrap">
+                    Triagem Executiva
+                  </span>
+                </div>
+
+                <nav aria-label="Navegação principal" class="space-y-1">
+                  <button type="button" data-action="nav" data-view="tasks"
+                    class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      state.view === "tasks"
+                        ? "bg-blue-50 text-blue-700"
+                        : "text-slate-700 hover:bg-slate-100"
+                    }">
+                    <span class="inline-flex items-center gap-2.5">
+                      <i data-lucide="list-checks" class="w-4 h-4 shrink-0"></i>
+                      <span>Fila de Demandas</span>
+                    </span>
+                    <span class="font-mono tabular-nums text-xs text-slate-500">${pendingCount}</span>
+                  </button>
+
+                  <button type="button" data-action="nav" data-view="rules"
+                    class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      state.view === "rules"
+                        ? "bg-blue-50 text-blue-700"
+                        : "text-slate-700 hover:bg-slate-100"
+                    }">
+                    <span class="inline-flex items-center gap-2.5">
+                      <i data-lucide="sliders-horizontal" class="w-4 h-4 shrink-0"></i>
+                      <span>Regras &amp; Categorias</span>
+                    </span>
+                    <span class="font-mono tabular-nums text-xs text-slate-500">${activeRulesCount}</span>
+                  </button>
+                </nav>
+
+                <div class="mt-8 pt-6 border-t border-slate-200 px-2 space-y-3">
+                  <div class="text-xs font-medium text-slate-500">Resumo da caixa</div>
+                  <dl class="space-y-2 text-xs">
+                    <div class="flex items-center justify-between">
+                      <dt class="text-slate-600">Demandas pendentes</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-slate-900">${pendingCount}</dd>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <dt class="text-slate-600">Urgência alta</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-red-700">${highCount}</dd>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <dt class="text-slate-600">Em aguardo</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-amber-700">${waitingCount}</dd>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <dt class="text-slate-600">Novas mensagens</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-blue-700">${unreadCount}</dd>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <dt class="text-slate-600">Regras ativas</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-slate-900">${activeRulesCount}</dd>
+                    </div>
+                  </dl>
+                </div>
+              </div>
+
+              <div class="pt-4 border-t border-slate-200 px-2 text-xs text-slate-500 leading-relaxed">
+                Sincronização integrada com Gmail e Planilha Google via Google Apps Script.
+              </div>
+            </div>
+          `;
+        }
+
+        function renderTasksView() {
+          if (state.isInitialLoading) {
+            return `
+              <section class="bg-white border border-slate-200 rounded-xl p-12 flex flex-col items-center justify-center text-center">
+                <i data-lucide="loader-2" class="w-6 h-6 text-blue-700 animate-spin mb-3"></i>
+                <p class="text-sm font-medium text-slate-800">
+                  Carregando demandas e regras da Planilha Google...
+                </p>
+              </section>
+            `;
+          }
+
+          if (state.tasks.length === 0) {
+            return `
+              <section class="bg-white border border-slate-200 rounded-xl p-12 flex flex-col items-center justify-center text-center">
+                <div class="w-11 h-11 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center mb-4">
+                  <i data-lucide="list-checks" class="w-5 h-5"></i>
+                </div>
+                <h2 class="text-base font-semibold text-slate-900">Sua fila de demandas está vazia</h2>
+                <p class="text-sm text-slate-500 max-w-md mt-1.5 leading-relaxed">
+                  Clique em <strong class="font-medium text-slate-700">Sincronizar E-mails</strong> para
+                  varrer novas mensagens do Gmail pelo Google Apps Script ou crie uma demanda manual.
+                </p>
+                <div class="mt-5 flex flex-wrap items-center justify-center gap-2.5">
+                  <button type="button" data-action="sync-emails" ${state.isSyncing ? "disabled" : ""}
+                    class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                    <i data-lucide="refresh-cw" class="w-4 h-4 ${state.isSyncing ? "animate-spin" : ""}"></i>
+                    <span>${state.isSyncing ? "Sincronizando..." : "Sincronizar E-mails"}</span>
+                  </button>
+                  <button type="button" data-action="open-create-modal"
+                    class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                    <span>Criar demanda manual</span>
+                  </button>
+                </div>
+              </section>
+            `;
+          }
+
+          const counts = {
+            Todos: state.tasks.length,
+            "A Fazer": 0,
+            Iniciado: 0,
+            Aguardando: 0,
+            Concluído: 0,
+          };
+          for (const t of state.tasks) {
+            const st = t.status ?? (t.completed ? "Concluído" : "A Fazer");
+            counts[st] = (counts[st] ?? 0) + 1;
+          }
+
+          const filtered = getFilteredTasks();
+
+          const statusTabsHtml = STATUS_FILTER_OPTIONS.map((st) => {
+            const active = state.statusFilter === st;
+            return `<button type="button" data-action="status-filter" data-value="${escapeHtml(st)}"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                active ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+              }">
+              <span>${escapeHtml(st)}</span>
+              <span class="font-mono tabular-nums text-[11px] text-slate-400">${counts[st]}</span>
+            </button>`;
+          }).join("");
+
+          const urgencyTabsHtml = ["Todas", "Alta", "Média", "Baixa"]
+            .map((lvl) => {
+              const active = state.urgencyFilter === lvl;
+              return `<button type="button" data-action="urgency-filter" data-value="${lvl}"
+                class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  active ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                }">${lvl}</button>`;
+            })
+            .join("");
+
+          let listHtml = "";
+          if (filtered.length === 0) {
+            listHtml = `
+              <div class="py-12 px-6 text-center">
+                <p class="text-sm font-medium text-slate-800">
+                  Nenhuma demanda corresponde aos filtros selecionados
+                </p>
+                <button type="button" data-action="clear-filters"
+                  class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 hover:underline cursor-pointer">
+                  Limpar filtros
+                </button>
+              </div>
+            `;
+          } else {
+            listHtml = `<div class="divide-y divide-slate-200">
+              ${filtered
+                .map((task) => {
+                  const currentStatus = task.status ?? (task.completed ? "Concluído" : "A Fazer");
+                  const isCompleted = currentStatus === "Concluído";
+                  const isEditingObs = state.editingObsTaskId === task.id;
+                  const historyList = task.historico_mensagens || [];
+                  const isExpanded = Boolean(state.expandedThreads[task.id]);
+
+                  const newMessageBanner = task.hasNewMessage
+                    ? `<div class="mb-3 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg flex flex-wrap items-center justify-between gap-2">
+                        <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-800">
+                          <i data-lucide="bell-ring" class="w-3.5 h-3.5 text-blue-700 shrink-0"></i>
+                          <span>Nova mensagem na conversa</span>
+                        </span>
+                        <button type="button" data-action="mark-seen" data-id="${escapeHtml(task.id)}"
+                          class="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
+                          <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                          <span>Marcar como visto</span>
+                        </button>
+                      </div>`
+                    : "";
+
+                  const waitingFieldHtml =
+                    currentStatus === "Aguardando"
+                      ? `<div class="pt-0.5 max-w-xl">
+                          <label for="waiting-note-${escapeHtml(task.id)}" class="flex items-center gap-1.5 text-xs font-medium text-amber-800 mb-1">
+                            <i data-lucide="message-square-text" class="w-3.5 h-3.5 shrink-0"></i>
+                            <span>Motivo / pendência em aguardo</span>
+                          </label>
+                          <input id="waiting-note-${escapeHtml(task.id)}" type="text"
+                            data-role="waiting-note" data-id="${escapeHtml(task.id)}"
+                            value="${escapeHtml(task.statusNote || "")}"
+                            placeholder="Aguardando retorno de... (ex: aprovação do jurídico)"
+                            class="w-full px-3 py-1.5 text-xs text-slate-900 bg-amber-50/60 border border-amber-200 rounded-lg placeholder:text-amber-700/60 focus:outline-none focus:bg-white focus:ring-2 focus:ring-amber-500/25 focus:border-amber-400" />
+                        </div>`
+                      : task.statusNote
+                      ? `<div class="flex items-center gap-1.5 text-xs text-slate-500">
+                          <i data-lucide="message-square-text" class="w-3.5 h-3.5 text-slate-400 shrink-0"></i>
+                          <span>Pendência registrada: ${escapeHtml(task.statusNote)}</span>
+                        </div>`
+                      : "";
+
+                  let obsHtml = "";
+                  if (isEditingObs) {
+                    obsHtml = `
+                      <div class="space-y-1.5">
+                        <label for="obs-input-${escapeHtml(task.id)}" class="flex items-center gap-1.5 text-xs font-medium text-slate-700">
+                          <i data-lucide="notebook-pen" class="w-3.5 h-3.5 text-blue-700 shrink-0"></i>
+                          <span>Observações e acompanhamento</span>
+                        </label>
+                        <div class="flex items-center gap-2">
+                          <input id="obs-input-${escapeHtml(task.id)}" type="text"
+                            data-role="obs-input" data-id="${escapeHtml(task.id)}"
+                            value="${escapeHtml(state.obsDraft)}"
+                            placeholder="Ex: Alinhado com Carlos em 17/11; aguardando versão final..."
+                            class="flex-1 min-w-0 px-3 py-1.5 text-xs text-slate-900 bg-white border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                          <button type="button" data-action="save-obs" data-id="${escapeHtml(task.id)}"
+                            class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                            <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                            <span>Salvar</span>
+                          </button>
+                          <button type="button" data-action="cancel-obs" data-obs-action="cancel"
+                            aria-label="Cancelar edição da observação"
+                            class="p-1.5 text-slate-500 hover:text-slate-800 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-colors cursor-pointer">
+                            <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                          </button>
+                        </div>
+                      </div>
+                    `;
+                  } else if (task.observacoes) {
+                    obsHtml = `
+                      <div class="flex items-start gap-2 px-3 py-2 bg-slate-50 border border-slate-200/80 rounded-lg text-xs text-slate-700">
+                        <i data-lucide="notebook-pen" class="w-3.5 h-3.5 text-slate-500 mt-0.5 shrink-0"></i>
+                        <div class="min-w-0 flex-1 leading-relaxed">
+                          <span class="font-medium text-slate-800">Observações: </span>
+                          <span>${escapeHtml(task.observacoes)}</span>
+                        </div>
+                        <button type="button" data-action="edit-obs" data-id="${escapeHtml(task.id)}"
+                          class="text-xs font-medium text-blue-700 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
+                          Editar nota
+                        </button>
+                      </div>
+                    `;
+                  } else {
+                    obsHtml = `
+                      <button type="button" data-action="edit-obs" data-id="${escapeHtml(task.id)}"
+                        class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-blue-700 transition-colors cursor-pointer">
+                        <i data-lucide="notebook-pen" class="w-3.5 h-3.5"></i>
+                        <span>Adicionar observação</span>
+                      </button>
+                    `;
+                  }
+
+                  const threadAccordionBtn =
+                    historyList.length > 0
+                      ? `<span aria-hidden="true">·</span>
+                         <button type="button" data-action="toggle-thread" data-id="${escapeHtml(task.id)}"
+                           class="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-blue-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                           <i data-lucide="messages-square" class="w-3.5 h-3.5 text-slate-400"></i>
+                           <span class="tabular-nums">${historyList.length} ${
+                             historyList.length === 1 ? "mensagem na conversa" : "mensagens na conversa"
+                           }</span>
+                           <i data-lucide="${isExpanded ? "chevron-up" : "chevron-down"}" class="w-3.5 h-3.5"></i>
+                         </button>`
+                      : "";
+
+                  const threadDrawerHtml =
+                    isExpanded && historyList.length > 0
+                      ? `<div class="mt-2 border border-slate-200 rounded-lg bg-slate-50/70 divide-y divide-slate-200/80 max-w-3xl">
+                          ${historyList
+                            .map(
+                              (msg, idx) => `
+                            <div class="px-3.5 py-2.5 text-xs space-y-1">
+                              <div class="flex flex-wrap items-center justify-between gap-2">
+                                <span class="font-medium text-slate-800">
+                                  <span class="font-mono tabular-nums text-slate-400 mr-1.5 font-normal">${String(
+                                    idx + 1
+                                  ).padStart(2, "0")}.</span>
+                                  ${escapeHtml(msg.remetente_nome)}${
+                                    msg.remetente_email ? ` (${escapeHtml(msg.remetente_email)})` : ""
+                                  }
+                                </span>
+                                <span class="font-mono tabular-nums text-slate-500">
+                                  ${escapeHtml(
+                                    formatReceivedDateTime(msg.data_hora, undefined, "Sem data")
+                                  )}
+                                </span>
+                              </div>
+                              <p class="text-slate-600 leading-relaxed pl-6">${escapeHtml(msg.resumo)}</p>
+                            </div>
+                          `
+                            )
+                            .join("")}
+                        </div>`
+                      : "";
+
+                  const statusOptionsHtml = TASK_STATUS_OPTIONS.map(
+                    (opt) =>
+                      `<option value="${escapeHtml(opt)}" ${
+                        currentStatus === opt ? "selected" : ""
+                      }>${escapeHtml(opt)}</option>`
+                  ).join("");
+
+                  return `
+                    <article class="p-5 sm:px-6 transition-colors hover:bg-slate-50/60 ${
+                      task.hasNewMessage ? "bg-blue-50/35" : isCompleted ? "bg-slate-50/40" : ""
+                    }">
+                      ${newMessageBanner}
+                      <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                        <div class="min-w-0 flex-1 space-y-2.5">
+                          <div class="flex flex-wrap items-center gap-2.5">
+                            ${renderStatusBadge(currentStatus)}
+                            ${renderUrgencyIndicator(task.urgencia)}
+                            <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
+                            <span class="text-xs font-medium text-slate-800">${escapeHtml(
+                              task.rotulo_aplicado || "Geral"
+                            )}</span>
+                            <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
+                            <span class="text-xs text-slate-600">${escapeHtml(task.categoria)}</span>
+                            <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
+                            <span title="${escapeHtml(task.prazo || "")}"
+                              class="inline-flex items-center gap-1 font-mono tabular-nums text-xs text-slate-700">
+                              <i data-lucide="calendar" class="w-3.5 h-3.5 text-slate-400"></i>
+                              ${escapeHtml(formatDisplayDate(task.prazo, "Sem prazo"))}
+                            </span>
+                          </div>
+
+                          <div>
+                            <h3 class="text-sm font-semibold text-slate-900 ${
+                              isCompleted ? "line-through text-slate-500" : ""
+                            }">${escapeHtml(task.titulo)}</h3>
+                            ${
+                              task.descricao
+                                ? `<p class="text-xs text-slate-600 mt-1 leading-relaxed max-w-3xl whitespace-pre-line">${escapeHtml(
+                                    task.descricao
+                                  )}</p>`
+                                : ""
+                            }
+                          </div>
+
+                          ${waitingFieldHtml}
+
+                          <div class="max-w-2xl">${obsHtml}</div>
+
+                          <div class="text-xs text-slate-500 flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-0.5">
+                            <span>Solicitante: ${escapeHtml(task.solicitante_nome)}</span>
+                            <span aria-hidden="true">·</span>
+                            <span class="inline-flex items-center gap-1 font-mono tabular-nums text-slate-600">
+                              <i data-lucide="clock" class="w-3 h-3 text-slate-400"></i>
+                              <span>Recebido em ${escapeHtml(
+                                formatReceivedDateTime(
+                                  task.data_hora_email_original,
+                                  task.data_email_original,
+                                  "Sem data"
+                                )
+                              )}</span>
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span class="truncate max-w-md">${escapeHtml(task.assunto_original)}</span>
+                            ${threadAccordionBtn}
+                          </div>
+
+                          ${threadDrawerHtml}
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-2 shrink-0">
+                          <select data-role="task-status-select" data-id="${escapeHtml(task.id)}"
+                            aria-label="Alterar status de ${escapeHtml(task.titulo)}"
+                            class="px-2.5 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-200 rounded-lg hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 cursor-pointer">
+                            ${statusOptionsHtml}
+                          </select>
+                          <button type="button" data-action="open-edit-modal" data-id="${escapeHtml(task.id)}"
+                            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                            <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                            <span>Editar</span>
+                          </button>
+                          <button type="button" data-action="delete-task" data-id="${escapeHtml(task.id)}"
+                            title="Remover demanda" aria-label="Remover ${escapeHtml(task.titulo)}"
+                            class="p-1.5 text-slate-400 hover:text-red-700 rounded-lg hover:bg-red-50 transition-colors cursor-pointer">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  `;
+                })
+                .join("")}
+            </div>`;
+          }
+
+          return `
+            <section class="bg-white border border-slate-200 rounded-xl flex flex-col">
+              <div class="px-6 py-4 border-b border-slate-200 flex flex-col gap-3">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div role="tablist" aria-label="Filtrar demandas por status"
+                    class="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                    ${statusTabsHtml}
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" data-action="open-create-modal"
+                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                      <span>Nova demanda</span>
+                    </button>
+                    <button type="button" data-action="export-csv" ${
+                      filtered.length === 0 ? "disabled" : ""
+                    }
+                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                      <span>Exportar CSV</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="relative flex-1 min-w-[240px] max-w-md">
+                    <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+                    <input type="search" id="task-search-input" value="${escapeHtml(state.search)}"
+                      placeholder="Buscar demanda, rótulo, observação ou histórico..."
+                      class="w-full pl-9 pr-3 py-1.5 text-sm text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                  </div>
+                  <div class="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                    ${urgencyTabsHtml}
+                  </div>
+                </div>
+              </div>
+              ${listHtml}
+            </section>
+          `;
+        }
+
+        function renderRulesView() {
+          const matchOptions = Object.keys(MATCH_TYPE_LABELS)
+            .map(
+              (k) =>
+                `<option value="${k}" ${
+                  state.ruleFormMatchType === k ? "selected" : ""
+                }>${escapeHtml(MATCH_TYPE_LABELS[k])}</option>`
+            )
+            .join("");
+
+          const catOptions = state.categories
+            .map(
+              (c) =>
+                `<option value="${escapeHtml(c)}" ${
+                  state.ruleFormCategoria === c ? "selected" : ""
+                }>${escapeHtml(c)}</option>`
+            )
+            .join("");
+
+          const rulesBody =
+            state.rules.length === 0
+              ? `<div class="p-10 text-center text-sm text-slate-500">
+                  Nenhuma regra configurada. O backend utilizará o rótulo padrão "Geral" e escolherá uma categoria da lista disponível.
+                </div>`
+              : `<div class="overflow-x-auto">
+                  <table class="w-full text-left border-collapse">
+                    <thead>
+                      <tr class="border-b border-slate-200 text-xs font-medium text-slate-500 bg-slate-50/70">
+                        <th class="py-2.5 pl-6 pr-3">Estado</th>
+                        <th class="py-2.5 px-3">Critério</th>
+                        <th class="py-2.5 px-3">Correspondência</th>
+                        <th class="py-2.5 px-3">Rótulo aplicado</th>
+                        <th class="py-2.5 px-3">Categoria</th>
+                        <th class="py-2.5 pl-3 pr-6 text-right">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 text-sm">
+                      ${state.rules
+                        .map((rule) => {
+                          if (state.editingRuleId === rule.id && state.editRuleDraft) {
+                            const d = state.editRuleDraft;
+                            return `
+                              <tr class="bg-blue-50/40">
+                                <td class="py-2.5 pl-6 pr-3 text-xs text-slate-600 whitespace-nowrap">${
+                                  d.ativo ? "Ativa" : "Pausada"
+                                }</td>
+                                <td class="py-2.5 px-3">
+                                  <select data-role="edit-rule-matchType" class="px-2 py-1 text-xs bg-white border border-slate-300 rounded-md">
+                                    ${Object.keys(MATCH_TYPE_LABELS)
+                                      .map(
+                                        (k) =>
+                                          `<option value="${k}" ${
+                                            d.matchType === k ? "selected" : ""
+                                          }>${escapeHtml(MATCH_TYPE_LABELS[k])}</option>`
+                                      )
+                                      .join("")}
+                                  </select>
+                                </td>
+                                <td class="py-2.5 px-3">
+                                  <input type="text" data-role="edit-rule-matchValue" value="${escapeHtml(
+                                    d.matchValue
+                                  )}" class="w-full px-2 py-1 font-mono text-xs bg-white border border-slate-300 rounded-md" />
+                                </td>
+                                <td class="py-2.5 px-3">
+                                  <input type="text" data-role="edit-rule-rotulo" value="${escapeHtml(
+                                    d.rotulo
+                                  )}" class="w-full px-2 py-1 text-xs bg-white border border-slate-300 rounded-md" />
+                                </td>
+                                <td class="py-2.5 px-3">
+                                  <select data-role="edit-rule-categoria" class="px-2 py-1 text-xs bg-white border border-slate-300 rounded-md">
+                                    ${state.categories
+                                      .map(
+                                        (c) =>
+                                          `<option value="${escapeHtml(c)}" ${
+                                            d.categoria === c ? "selected" : ""
+                                          }>${escapeHtml(c)}</option>`
+                                      )
+                                      .join("")}
+                                  </select>
+                                </td>
+                                <td class="py-2.5 pl-3 pr-6 text-right whitespace-nowrap">
+                                  <div class="inline-flex items-center gap-1">
+                                    <button type="button" data-action="save-rule-edit" data-id="${escapeHtml(
+                                      rule.id
+                                    )}" aria-label="Salvar regra" class="p-1.5 text-emerald-700 hover:bg-emerald-50 rounded-md cursor-pointer">
+                                      <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                    <button type="button" data-action="cancel-rule-edit" aria-label="Cancelar edição" class="p-1.5 text-slate-500 hover:bg-slate-100 rounded-md cursor-pointer">
+                                      <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            `;
+                          }
+
+                          return `
+                            <tr class="hover:bg-slate-50/80 transition-colors ${
+                              rule.ativo ? "" : "opacity-55"
+                            }">
+                              <td class="py-3 pl-6 pr-3 whitespace-nowrap">
+                                <button type="button" data-action="toggle-rule" data-id="${escapeHtml(
+                                  rule.id
+                                )}" class="inline-flex items-center gap-1.5 text-xs font-medium cursor-pointer ${
+                                  rule.ativo ? "text-emerald-700" : "text-slate-500"
+                                }">
+                                  <i data-lucide="power" class="w-3.5 h-3.5"></i>
+                                  <span>${rule.ativo ? "Ativa" : "Pausada"}</span>
+                                </button>
+                              </td>
+                              <td class="py-3 px-3 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(
+                                MATCH_TYPE_LABELS[rule.matchType] || rule.matchType
+                              )}</td>
+                              <td class="py-3 px-3 font-mono text-xs text-slate-900">${escapeHtml(
+                                rule.matchValue
+                              )}</td>
+                              <td class="py-3 px-3 text-xs font-semibold text-slate-900">${escapeHtml(
+                                rule.rotulo
+                              )}</td>
+                              <td class="py-3 px-3 text-xs text-slate-700 whitespace-nowrap">${escapeHtml(
+                                rule.categoria
+                              )}</td>
+                              <td class="py-3 pl-3 pr-6 text-right whitespace-nowrap">
+                                <div class="inline-flex items-center gap-1">
+                                  <button type="button" data-action="edit-rule" data-id="${escapeHtml(
+                                    rule.id
+                                  )}" aria-label="Editar regra ${escapeHtml(
+                                    rule.rotulo
+                                  )}" class="p-1.5 text-slate-400 hover:text-blue-700 rounded-md hover:bg-slate-100 transition-colors cursor-pointer">
+                                    <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                                  </button>
+                                  <button type="button" data-action="delete-rule" data-id="${escapeHtml(
+                                    rule.id
+                                  )}" aria-label="Remover regra ${escapeHtml(
+                                    rule.rotulo
+                                  )}" class="p-1.5 text-slate-400 hover:text-red-700 rounded-md hover:bg-red-50 transition-colors cursor-pointer">
+                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          `;
+                        })
+                        .join("")}
+                    </tbody>
+                  </table>
+                </div>`;
+
+          return `
+            <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+              <section class="xl:col-span-8 bg-white border border-slate-200 rounded-xl flex flex-col">
+                <div class="px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 class="text-base font-semibold text-slate-900">Regras de rotulagem e categoria</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">
+                      Todas as alterações são salvas automaticamente na Planilha Google para a próxima sincronização do Gmail.
+                    </p>
+                  </div>
+                  <button type="button" data-action="reset-rules"
+                    class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+                    <span>Restaurar padrões</span>
+                  </button>
+                </div>
+
+                <form id="create-rule-form" class="p-6 border-b border-slate-200 bg-slate-50/60 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                  <div class="sm:col-span-3">
+                    <label for="rule-match-type" class="block text-xs font-medium text-slate-700 mb-1">Critério</label>
+                    <select id="rule-match-type" class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
+                      ${matchOptions}
+                    </select>
+                  </div>
+                  <div class="sm:col-span-3">
+                    <label for="rule-match-value" class="block text-xs font-medium text-slate-700 mb-1">Valor de correspondência</label>
+                    <input id="rule-match-value" type="text" value="${escapeHtml(
+                      state.ruleFormMatchValue
+                    )}" placeholder="@fornecedor.com.br"
+                      class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                  </div>
+                  <div class="sm:col-span-3">
+                    <label for="rule-rotulo" class="block text-xs font-medium text-slate-700 mb-1">Rótulo exato</label>
+                    <input id="rule-rotulo" type="text" value="${escapeHtml(
+                      state.ruleFormRotulo
+                    )}" placeholder="Ex: Jurídico Externo"
+                      class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                  </div>
+                  <div class="sm:col-span-3 flex items-end gap-2">
+                    <div class="flex-1 min-w-0">
+                      <label for="rule-categoria" class="block text-xs font-medium text-slate-700 mb-1">Categoria</label>
+                      <select id="rule-categoria" class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
+                        ${catOptions}
+                      </select>
+                    </div>
+                    <button type="submit"
+                      class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                      <span>Adicionar</span>
+                    </button>
+                  </div>
+                </form>
+
+                ${rulesBody}
+              </section>
+
+              <section class="xl:col-span-4 bg-white border border-slate-200 rounded-xl flex flex-col">
+                <div class="px-6 py-4 border-b border-slate-200">
+                  <h2 class="text-base font-semibold text-slate-900">Categorias disponíveis</h2>
+                  <p class="text-xs text-slate-500 mt-0.5">
+                    Opções disponíveis para seleção nas regras e na edição manual das demandas.
+                  </p>
+                </div>
+
+                <form id="create-category-form" class="p-5 border-b border-slate-100 flex items-center gap-2">
+                  <input id="new-category-input" type="text" value="${escapeHtml(
+                    state.newCategoryInput
+                  )}" placeholder="Nova categoria..."
+                    class="flex-1 min-w-0 px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                  <button type="submit"
+                    class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                    <span>Incluir</span>
+                  </button>
+                </form>
+
+                <div class="divide-y divide-slate-100">
+                  ${state.categories
+                    .map(
+                      (cat) => `
+                    <div class="px-5 py-2.5 flex items-center justify-between gap-3 text-sm">
+                      <span class="text-slate-800 font-medium">${escapeHtml(cat)}</span>
+                      <button type="button" data-action="delete-category" data-category="${escapeHtml(
+                        cat
+                      )}" ${state.categories.length <= 1 ? "disabled" : ""}
+                        aria-label="Remover categoria ${escapeHtml(cat)}"
+                        class="p-1 text-slate-400 hover:text-red-700 disabled:opacity-30 rounded-md hover:bg-red-50 transition-colors cursor-pointer">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                      </button>
+                    </div>
+                  `
+                    )
+                    .join("")}
+                </div>
+              </section>
+            </div>
+          `;
+        }
+
+        function renderModal() {
+          const task = state.modalTask;
+          if (!task) return "";
+
+          const labelSet = new Set(["Geral", ...getAvailableLabels()]);
+          if (task.rotulo_aplicado) labelSet.add(task.rotulo_aplicado);
+          const labels = Array.from(labelSet).filter((v) => v.trim().length > 0);
+
+          const catSet = new Set(state.categories);
+          if (task.categoria) catSet.add(task.categoria);
+          if (catSet.size === 0) catSet.add("Outro");
+          const cats = Array.from(catSet);
+
+          const historyList = task.historico_mensagens || [];
+          const historyHtml =
+            historyList.length > 0
+              ? `<div class="border border-slate-200 rounded-lg overflow-hidden">
+                  <button type="button" data-action="toggle-modal-history"
+                    class="w-full px-3.5 py-2.5 bg-slate-50 flex items-center justify-between text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer">
+                    <span class="inline-flex items-center gap-1.5">
+                      <i data-lucide="messages-square" class="w-3.5 h-3.5 text-slate-500"></i>
+                      <span class="tabular-nums">Histórico da conversa (${historyList.length} ${
+                        historyList.length === 1 ? "mensagem" : "mensagens"
+                      })</span>
+                    </span>
+                    <i data-lucide="${
+                      state.modalShowHistory ? "chevron-up" : "chevron-down"
+                    }" class="w-4 h-4 text-slate-500"></i>
+                  </button>
+                  ${
+                    state.modalShowHistory
+                      ? `<div class="max-h-48 overflow-y-auto divide-y divide-slate-100 bg-white">
+                          ${historyList
+                            .map(
+                              (msg) => `
+                            <div class="px-3.5 py-2.5 text-xs space-y-1">
+                              <div class="flex flex-wrap items-center justify-between gap-2 text-slate-500">
+                                <span class="font-medium text-slate-800">${escapeHtml(
+                                  msg.remetente_nome
+                                )}${
+                                  msg.remetente_email ? ` (${escapeHtml(msg.remetente_email)})` : ""
+                                }</span>
+                                <span class="font-mono tabular-nums">${escapeHtml(
+                                  formatReceivedDateTime(msg.data_hora, undefined, "Sem data")
+                                )}</span>
+                              </div>
+                              <p class="text-slate-600 leading-relaxed">${escapeHtml(msg.resumo)}</p>
+                            </div>
+                          `
+                            )
+                            .join("")}
+                        </div>`
+                      : ""
+                  }
+                </div>`
+              : "";
+
+          return `
+            <div data-action="modal-backdrop" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40" role="dialog" aria-modal="true">
+              <div class="bg-white border border-slate-200 rounded-xl w-full max-w-2xl shadow-lg overflow-hidden max-h-[92vh] overflow-y-auto">
+                <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4">
+                  <div>
+                    <h2 class="text-base font-semibold text-slate-900">
+                      ${state.modalMode === "create" ? "Nova demanda" : "Editar demanda"}
+                    </h2>
+                    <p class="text-xs text-slate-500 mt-0.5 truncate">
+                      ${escapeHtml(task.solicitante_nome)} · ${escapeHtml(task.assunto_original)}
+                    </p>
+                  </div>
+                  <button type="button" data-action="close-modal" aria-label="Fechar janela"
+                    class="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                  </button>
+                </div>
+
+                <form id="modal-task-form" class="p-6 space-y-4">
+                  <div>
+                    <label for="modal-titulo" class="block text-xs font-medium text-slate-700 mb-1">Título da tarefa</label>
+                    <input id="modal-titulo" type="text" required value="${escapeHtml(task.titulo)}"
+                      class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                  </div>
+
+                  <div>
+                    <label for="modal-descricao" class="block text-xs font-medium text-slate-700 mb-1">Descrição / resumo</label>
+                    <textarea id="modal-descricao" rows="3"
+                      class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg resize-y focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">${escapeHtml(
+                        task.descricao
+                      )}</textarea>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <div class="flex items-center justify-between mb-1">
+                        <label for="modal-prazo" class="text-xs font-medium text-slate-700">Prazo</label>
+                        <button type="button" data-action="clear-modal-prazo" class="text-xs text-slate-500 hover:text-slate-800 underline cursor-pointer">
+                          Remover prazo
+                        </button>
+                      </div>
+                      <input id="modal-prazo" type="date" value="${escapeHtml(task.prazo || "")}"
+                        class="w-full px-3 py-2 text-sm font-mono text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                    </div>
+
+                    <div>
+                      <label for="modal-urgencia" class="block text-xs font-medium text-slate-700 mb-1">Urgência</label>
+                      <select id="modal-urgencia"
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
+                        ${["Alta", "Média", "Baixa"]
+                          .map(
+                            (u) =>
+                              `<option value="${u}" ${task.urgencia === u ? "selected" : ""}>${u}</option>`
+                          )
+                          .join("")}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label for="modal-rotulo" class="block text-xs font-medium text-slate-700 mb-1">Rótulo</label>
+                      <select id="modal-rotulo"
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
+                        ${labels
+                          .map(
+                            (l) =>
+                              `<option value="${escapeHtml(l)}" ${
+                                (task.rotulo_aplicado || "Geral") === l ? "selected" : ""
+                              }>${escapeHtml(l)}</option>`
+                          )
+                          .join("")}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label for="modal-categoria" class="block text-xs font-medium text-slate-700 mb-1">Categoria</label>
+                      <select id="modal-categoria"
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
+                        ${cats
+                          .map(
+                            (c) =>
+                              `<option value="${escapeHtml(c)}" ${
+                                task.categoria === c ? "selected" : ""
+                              }>${escapeHtml(c)}</option>`
+                          )
+                          .join("")}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label for="modal-status" class="block text-xs font-medium text-slate-700 mb-1">Status</label>
+                      <select id="modal-status"
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
+                        ${TASK_STATUS_OPTIONS.map(
+                          (s) =>
+                            `<option value="${escapeHtml(s)}" ${
+                              task.status === s ? "selected" : ""
+                            }>${escapeHtml(s)}</option>`
+                        ).join("")}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label for="modal-status-note" class="block text-xs font-medium text-slate-700 mb-1">Observação do status</label>
+                      <input id="modal-status-note" type="text" value="${escapeHtml(
+                        task.statusNote || ""
+                      )}" placeholder="Ex: Aguardando retorno de..."
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label for="modal-observacoes" class="block text-xs font-medium text-slate-700 mb-1">Observações e acompanhamento</label>
+                    <textarea id="modal-observacoes" rows="2" placeholder="Estágio atual, anotações rápidas ou com quem o assunto já foi tratado..."
+                      class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg resize-y focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">${escapeHtml(
+                        task.observacoes || ""
+                      )}</textarea>
+                  </div>
+
+                  ${historyHtml}
+
+                  <div class="pt-3 border-t border-slate-100 flex items-center justify-end gap-2.5">
+                    <button type="button" data-action="close-modal"
+                      class="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      Cancelar
+                    </button>
+                    <button type="submit"
+                      class="px-4 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      Salvar alterações
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          `;
+        }
+
+        function render() {
+          const viewMeta =
+            state.view === "tasks"
+              ? { title: "Fila de Demandas", breadcrumb: "Triagem Executiva / Fila de Demandas" }
+              : { title: "Regras & Categorias", breadcrumb: "Triagem Executiva / Regras & Categorias" };
+
+          const headerStatusHtml =
+            state.isInitialLoading || state.isSaving
+              ? `<span class="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 whitespace-nowrap">
+                  <i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin text-blue-700"></i>
+                  <span>${state.isInitialLoading ? "Carregando planilha..." : "Salvando na planilha..."}</span>
+                </span>`
+              : state.syncFeedback
+              ? `<span class="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 whitespace-nowrap tabular-nums">
+                  <i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-emerald-600"></i>
+                  <span>${escapeHtml(state.syncFeedback)}</span>
+                </span>`
+              : "";
+
+          const errorBannerHtml = state.apiError
+            ? `<div role="alert" class="mb-5 px-4 py-3 bg-red-50 border border-red-200 rounded-xl flex items-start justify-between gap-3 text-xs text-red-800">
+                <div class="flex items-start gap-2.5">
+                  <i data-lucide="alert-circle" class="w-4 h-4 text-red-700 shrink-0 mt-0.5"></i>
+                  <div>
+                    <p class="font-semibold text-red-900">Erro de comunicação com o Google Apps Script</p>
+                    <p class="mt-0.5 leading-relaxed">${escapeHtml(state.apiError)}</p>
+                  </div>
+                </div>
+                <button type="button" data-action="dismiss-error" aria-label="Fechar aviso de erro"
+                  class="p-1 text-red-600 hover:text-red-900 rounded-md cursor-pointer">
+                  <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+              </div>`
+            : "";
+
+          const mobileDrawer = state.mobileMenuOpen
+            ? `<div class="fixed inset-0 z-40 lg:hidden flex">
+                <div data-action="close-mobile-menu" class="fixed inset-0 bg-slate-900/30"></div>
+                <aside class="relative z-50 w-64 bg-white h-full border-r border-slate-200">
+                  <button type="button" data-action="close-mobile-menu" aria-label="Fechar menu"
+                    class="absolute top-4 right-3 p-1.5 text-slate-500 hover:text-slate-900 cursor-pointer">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                  </button>
+                  ${renderSidebar()}
+                </aside>
+              </div>`
+            : "";
+
+          const root = document.getElementById("app");
+          root.innerHTML = `
+            <aside class="hidden lg:block w-64 shrink-0 bg-white border-r border-slate-200">
+              <div class="sticky top-0 h-screen overflow-y-auto">${renderSidebar()}</div>
+            </aside>
+            ${mobileDrawer}
+            <div class="flex-1 min-w-0 flex flex-col">
+              <header class="bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between gap-4">
+                <div class="flex items-center gap-3 min-w-0">
+                  <button type="button" data-action="open-mobile-menu" aria-label="Abrir menu"
+                    class="lg:hidden p-1.5 -ml-1.5 text-slate-600 hover:text-slate-900 cursor-pointer">
+                    <i data-lucide="menu" class="w-5 h-5"></i>
+                  </button>
+                  <span class="text-xs font-medium text-slate-500 truncate whitespace-nowrap">${viewMeta.breadcrumb}</span>
+                </div>
+                <div class="flex items-center gap-3 shrink-0">
+                  ${headerStatusHtml}
+                  <button type="button" data-action="sync-emails" ${
+                    state.isSyncing || state.isInitialLoading ? "disabled" : ""
+                  }
+                    class="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5 ${
+                      state.isSyncing ? "animate-spin" : ""
+                    }"></i>
+                    <span>${state.isSyncing ? "Sincronizando..." : "Sincronizar E-mails"}</span>
+                  </button>
+                </div>
+              </header>
+
+              <main class="flex-1 p-6 max-w-[1440px] w-full mx-auto">
+                ${errorBannerHtml}
+                <div class="mb-6">
+                  <h1 class="font-display text-2xl font-bold tracking-tight text-slate-900">${viewMeta.title}</h1>
+                </div>
+                ${state.view === "tasks" ? renderTasksView() : renderRulesView()}
+              </main>
+            </div>
+            ${renderModal()}
+          `;
+
+          if (window.lucide && typeof window.lucide.createIcons === "function") {
+            window.lucide.createIcons();
+          }
+
+          if (state.editingObsTaskId) {
+            const obsInput = document.querySelector(`[data-role="obs-input"][data-id="${CSS.escape(state.editingObsTaskId)}"]`);
+            if (obsInput) {
+              obsInput.focus();
+              const len = obsInput.value.length;
+              obsInput.setSelectionRange(len, len);
+            }
+          }
+        }
+
+        async function persistDemand(updatedTask) {
+          state.isSaving = true;
+          state.apiError = null;
+          render();
+          try {
+            await postUpdateDemandToGas(updatedTask);
+            state.syncFeedback = `Salvo na planilha às ${formatCurrentTime()}`;
+          } catch (err) {
+            state.apiError =
+              err instanceof Error ? err.message : "Erro ao salvar demanda na planilha.";
+          } finally {
+            state.isSaving = false;
+            render();
+          }
+        }
+
+        async function persistRules(nextRules) {
+          state.isSaving = true;
+          state.apiError = null;
+          render();
+          try {
+            await postSaveRulesToGas(nextRules);
+            state.syncFeedback = `Regras salvas às ${formatCurrentTime()}`;
+          } catch (err) {
+            state.apiError =
+              err instanceof Error ? err.message : "Erro ao salvar regras na planilha.";
+          } finally {
+            state.isSaving = false;
+            render();
+          }
+        }
+
+        async function handleSyncEmails() {
+          if (state.isSyncing) return;
+          state.isSyncing = true;
+          state.apiError = null;
+          render();
+          try {
+            const payload = await syncEmailsFromGas();
+            applyGasPayload(payload);
+            state.syncFeedback = `Gmail sincronizado às ${formatCurrentTime()}`;
+          } catch (err) {
+            state.apiError =
+              err instanceof Error ? err.message : "Falha ao sincronizar e-mails do Gmail.";
+          } finally {
+            state.isSyncing = false;
+            render();
+          }
+        }
+
+        function exportCsv() {
+          const filtered = getFilteredTasks();
+          const headers = [
+            "Status",
+            "Observação do Status",
+            "Observações e Acompanhamento",
+            "Mensagens na Conversa",
+            "Título",
+            "Descrição",
+            "Urgência",
+            "Prazo",
+            "Prazo Original",
+            "Categoria",
+            "Rótulo Aplicado",
+            "Regra Acionada",
+            "Solicitante",
+            "E-mail Solicitante",
+            "Assunto Original",
+            "Recebido em (Data/Hora)",
+          ];
+          const escapeCell = (val) => `"${String(val ?? "").replace(/"/g, '""')}"`;
+          const rows = filtered.map((t) =>
+            [
+              t.status ?? (t.completed ? "Concluído" : "A Fazer"),
+              t.statusNote ?? "",
+              t.observacoes ?? "",
+              (t.historico_mensagens || []).length || 1,
+              t.titulo,
+              t.descricao,
+              t.urgencia,
+              t.prazo ?? "",
+              t.prazo_texto_original ?? "",
+              t.categoria,
+              t.rotulo_aplicado ?? "Geral",
+              t.regra_acionada ? "Sim" : "Não",
+              t.solicitante_nome,
+              t.solicitante_email,
+              t.assunto_original,
+              t.data_hora_email_original || t.data_email_original,
+            ]
+              .map(escapeCell)
+              .join(",")
+          );
+          const csv = "\uFEFF" + [headers.map(escapeCell).join(","), ...rows].join("\n");
+          const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `fila-demandas-${new Date().toISOString().slice(0, 10)}.csv`;
+          link.click();
+          URL.revokeObjectURL(url);
+        }
+
+        function commitObs(taskId) {
+          const task = state.tasks.find((t) => t.id === taskId);
+          state.editingObsTaskId = null;
+          if (!task) {
+            render();
+            return;
+          }
+          const cleaned = state.obsDraft.trim() || undefined;
+          if ((task.observacoes ?? undefined) === cleaned) {
+            render();
+            return;
+          }
+          const updated = { ...task, observacoes: cleaned };
+          state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+          void persistDemand(updated);
+        }
+
+        const rootEl = document.getElementById("app");
+
+        rootEl.addEventListener("click", (e) => {
+          const btn = e.target.closest("[data-action]");
+          if (!btn) return;
+          const action = btn.dataset.action;
+
+          if (action === "nav") {
+            state.view = btn.dataset.view;
+            state.mobileMenuOpen = false;
+            render();
+          } else if (action === "open-mobile-menu") {
+            state.mobileMenuOpen = true;
+            render();
+          } else if (action === "close-mobile-menu") {
+            state.mobileMenuOpen = false;
+            render();
+          } else if (action === "sync-emails") {
+            void handleSyncEmails();
+          } else if (action === "dismiss-error") {
+            state.apiError = null;
+            render();
+          } else if (action === "status-filter") {
+            state.statusFilter = btn.dataset.value;
+            render();
+          } else if (action === "urgency-filter") {
+            state.urgencyFilter = btn.dataset.value;
+            render();
+          } else if (action === "clear-filters") {
+            state.search = "";
+            state.statusFilter = "Todos";
+            state.urgencyFilter = "Todas";
+            render();
+          } else if (action === "export-csv") {
+            exportCsv();
+          } else if (action === "mark-seen") {
+            const taskId = btn.dataset.id;
+            const target = state.tasks.find((t) => t.id === taskId);
+            if (target) {
+              const updated = { ...target, hasNewMessage: false };
+              state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+              void persistDemand(updated);
+            }
+          } else if (action === "edit-obs") {
+            const task = state.tasks.find((t) => t.id === btn.dataset.id);
+            if (task) {
+              state.editingObsTaskId = task.id;
+              state.obsDraft = task.observacoes || "";
+              render();
+            }
+          } else if (action === "save-obs") {
+            commitObs(btn.dataset.id);
+          } else if (action === "cancel-obs") {
+            state.editingObsTaskId = null;
+            state.obsDraft = "";
+            render();
+          } else if (action === "toggle-thread") {
+            const id = btn.dataset.id;
+            state.expandedThreads[id] = !state.expandedThreads[id];
+            render();
+          } else if (action === "open-edit-modal") {
+            const task = state.tasks.find((t) => t.id === btn.dataset.id);
+            if (task) {
+              state.modalTask = { ...task };
+              state.modalMode = "edit";
+              state.modalShowHistory = false;
+              render();
+            }
+          } else if (action === "open-create-modal") {
+            const nowDt = getNowIsoDateTime();
+            state.modalTask = {
+              id: `manual-${uuid()}`,
+              triageId: "manual",
+              titulo: "",
+              descricao: "",
+              prazo: null,
+              prazo_texto_original: null,
+              urgencia: "Média",
+              categoria: state.categories[0] || "Outro",
+              assunto_original: "Demanda manual",
+              solicitante_nome: "Criação manual",
+              solicitante_email: "",
+              data_email_original: nowDt.slice(0, 10),
+              data_hora_email_original: nowDt,
+              rotulo_aplicado: "Geral",
+              regra_acionada: false,
+              status: "A Fazer",
+              statusNote: "",
+              observacoes: "",
+              hasNewMessage: false,
+              historico_mensagens: [],
+              completed: false,
+            };
+            state.modalMode = "create";
+            state.modalShowHistory = false;
+            render();
+          } else if (action === "close-modal") {
+            state.modalTask = null;
+            render();
+          } else if (action === "modal-backdrop") {
+            if (e.target === btn) {
+              state.modalTask = null;
+              render();
+            }
+          } else if (action === "clear-modal-prazo") {
+            const input = document.getElementById("modal-prazo");
+            if (input) input.value = "";
+          } else if (action === "toggle-modal-history") {
+            state.modalShowHistory = !state.modalShowHistory;
+            render();
+          } else if (action === "delete-task") {
+            const id = btn.dataset.id;
+            state.tasks = state.tasks.filter((t) => t.id !== id);
+            render();
+          } else if (action === "toggle-rule") {
+            const id = btn.dataset.id;
+            const next = state.rules.map((r) => (r.id === id ? { ...r, ativo: !r.ativo } : r));
+            state.rules = next;
+            void persistRules(next);
+          } else if (action === "edit-rule") {
+            const rule = state.rules.find((r) => r.id === btn.dataset.id);
+            if (rule) {
+              state.editingRuleId = rule.id;
+              state.editRuleDraft = { ...rule };
+              render();
+            }
+          } else if (action === "save-rule-edit") {
+            const id = btn.dataset.id;
+            const matchTypeEl = document.querySelector('[data-role="edit-rule-matchType"]');
+            const matchValueEl = document.querySelector('[data-role="edit-rule-matchValue"]');
+            const rotuloEl = document.querySelector('[data-role="edit-rule-rotulo"]');
+            const categoriaEl = document.querySelector('[data-role="edit-rule-categoria"]');
+            const matchValue = matchValueEl ? matchValueEl.value.trim() : "";
+            const rotulo = rotuloEl ? rotuloEl.value.trim() : "";
+            if (!matchValue || !rotulo) return;
+            const next = state.rules.map((r) =>
+              r.id === id
+                ? {
+                    ...r,
+                    matchType: matchTypeEl ? matchTypeEl.value : r.matchType,
+                    matchValue,
+                    rotulo,
+                    categoria: categoriaEl ? categoriaEl.value : r.categoria,
+                  }
+                : r
+            );
+            state.editingRuleId = null;
+            state.editRuleDraft = null;
+            state.rules = next;
+            void persistRules(next);
+          } else if (action === "cancel-rule-edit") {
+            state.editingRuleId = null;
+            state.editRuleDraft = null;
+            render();
+          } else if (action === "delete-rule") {
+            const id = btn.dataset.id;
+            const next = state.rules.filter((r) => r.id !== id);
+            state.rules = next;
+            void persistRules(next);
+          } else if (action === "reset-rules") {
+            state.rules = [...DEFAULT_RULES];
+            state.categories = [...DEFAULT_CATEGORIES];
+            saveStoredCategories(state.categories);
+            void persistRules(state.rules);
+          } else if (action === "delete-category") {
+            const cat = btn.dataset.category;
+            if (state.categories.length > 1) {
+              state.categories = state.categories.filter((c) => c !== cat);
+              saveStoredCategories(state.categories);
+              render();
+            }
+          }
+        });
+
+        rootEl.addEventListener("change", (e) => {
+          const target = e.target;
+          if (target.dataset.role === "task-status-select") {
+            const taskId = target.dataset.id;
+            const nextStatus = target.value;
+            const task = state.tasks.find((t) => t.id === taskId);
+            if (!task) return;
+            const updated = {
+              ...task,
+              status: nextStatus,
+              completed: nextStatus === "Concluído",
+              completedAt:
+                nextStatus === "Concluído" ? task.completedAt ?? new Date().toISOString() : undefined,
+            };
+            state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+            void persistDemand(updated);
+          } else if (target.id === "rule-match-type") {
+            state.ruleFormMatchType = target.value;
+          } else if (target.id === "rule-categoria") {
+            state.ruleFormCategoria = target.value;
+          }
+        });
+
+        rootEl.addEventListener("input", (e) => {
+          const target = e.target;
+          if (target.id === "task-search-input") {
+            const pos = target.selectionStart;
+            state.search = target.value;
+            render();
+            const el = document.getElementById("task-search-input");
+            if (el) {
+              el.focus();
+              if (pos !== null) el.setSelectionRange(pos, pos);
+            }
+          } else if (target.dataset.role === "waiting-note") {
+            const id = target.dataset.id;
+            state.tasks = state.tasks.map((t) =>
+              t.id === id ? { ...t, statusNote: target.value } : t
+            );
+          } else if (target.dataset.role === "obs-input") {
+            state.obsDraft = target.value;
+          } else if (target.id === "rule-match-value") {
+            state.ruleFormMatchValue = target.value;
+          } else if (target.id === "rule-rotulo") {
+            state.ruleFormRotulo = target.value;
+          } else if (target.id === "new-category-input") {
+            state.newCategoryInput = target.value;
+          }
+        });
+
+        rootEl.addEventListener(
+          "blur",
+          (e) => {
+            const target = e.target;
+            if (target.dataset.role === "waiting-note") {
+              const id = target.dataset.id;
+              const task = state.tasks.find((t) => t.id === id);
+              if (task) {
+                const cleaned = task.statusNote ? task.statusNote.trim() : undefined;
+                const updated = { ...task, statusNote: cleaned || undefined };
+                state.tasks = state.tasks.map((t) => (t.id === id ? updated : t));
+                void persistDemand(updated);
+              }
+            } else if (target.dataset.role === "obs-input") {
+              const related = e.relatedTarget;
+              if (related && related.dataset && related.dataset.obsAction === "cancel") {
+                return;
+              }
+              commitObs(target.dataset.id);
+            }
+          },
+          true
+        );
+
+        rootEl.addEventListener("keydown", (e) => {
+          const target = e.target;
+          if (target.dataset.role === "waiting-note" && e.key === "Enter") {
+            e.preventDefault();
+            target.blur();
+          } else if (target.dataset.role === "obs-input") {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitObs(target.dataset.id);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              state.editingObsTaskId = null;
+              state.obsDraft = "";
+              render();
+            }
+          }
+        });
+
+        rootEl.addEventListener("submit", (e) => {
+          e.preventDefault();
+          const form = e.target;
+          if (form.id === "modal-task-form" && state.modalTask) {
+            const titulo = document.getElementById("modal-titulo").value.trim();
+            if (!titulo) return;
+            const descricao = document.getElementById("modal-descricao").value.trim();
+            const prazoVal = document.getElementById("modal-prazo").value.trim();
+            const urgencia = document.getElementById("modal-urgencia").value;
+            const rotulo = document.getElementById("modal-rotulo").value.trim() || "Geral";
+            const categoria = document.getElementById("modal-categoria").value.trim() || "Outro";
+            const status = document.getElementById("modal-status").value;
+            const statusNote = document.getElementById("modal-status-note").value.trim() || undefined;
+            const observacoes = document.getElementById("modal-observacoes").value.trim() || undefined;
+            const isCompleted = status === "Concluído";
+
+            const base = state.modalTask;
+            const updated = {
+              ...base,
+              titulo,
+              descricao,
+              prazo: prazoVal || null,
+              urgencia,
+              rotulo_aplicado: rotulo,
+              categoria,
+              status,
+              statusNote,
+              observacoes,
+              completed: isCompleted,
+              completedAt: isCompleted ? base.completedAt ?? new Date().toISOString() : undefined,
+            };
+
+            if (state.modalMode === "create") {
+              if (!updated.historico_mensagens || updated.historico_mensagens.length === 0) {
+                updated.historico_mensagens = [
+                  {
+                    id: `msg-${uuid()}`,
+                    remetente_nome: "Criação manual",
+                    remetente_email: "",
+                    data_hora: getNowIsoDateTime(),
+                    resumo: descricao || titulo,
+                  },
+                ];
+              }
+              state.tasks = [updated, ...state.tasks];
+            } else {
+              state.tasks = state.tasks.map((t) => (t.id === updated.id ? updated : t));
+            }
+            state.modalTask = null;
+            void persistDemand(updated);
+          } else if (form.id === "create-rule-form") {
+            const matchType = document.getElementById("rule-match-type").value;
+            const matchValue = document.getElementById("rule-match-value").value.trim();
+            const rotulo = document.getElementById("rule-rotulo").value.trim();
+            const categoria = document.getElementById("rule-categoria").value.trim() || "Outro";
+            if (!matchValue || !rotulo) return;
+
+            const newRule = {
+              id: uuid(),
+              ativo: true,
+              matchType,
+              matchValue,
+              rotulo,
+              categoria,
+            };
+            state.ruleFormMatchValue = "";
+            state.ruleFormRotulo = "";
+            state.rules = [newRule, ...state.rules];
+            void persistRules(state.rules);
+          } else if (form.id === "create-category-form") {
+            const val = document.getElementById("new-category-input").value.trim();
+            if (!val) return;
+            if (!state.categories.some((c) => c.toLowerCase() === val.toLowerCase())) {
+              state.categories = [...state.categories, val];
+              saveStoredCategories(state.categories);
+            }
+            state.newCategoryInput = "";
+            render();
+          }
+        });
+
+        window.addEventListener("keydown", (e) => {
+          if (e.key === "Escape" && state.modalTask) {
+            state.modalTask = null;
+            render();
+          }
+        });
+
+        async function init() {
+          render();
+          try {
+            const payload = await fetchInitialFromGas();
+            applyGasPayload(payload);
+            state.syncFeedback = `Dados carregados às ${formatCurrentTime()}`;
+          } catch (err) {
+            state.apiError =
+              err instanceof Error
+                ? err.message
+                : "Não foi possível carregar os dados da Planilha Google.";
+          } finally {
+            state.isInitialLoading = false;
+            render();
+          }
+        }
+
+        init();
+      })();
+    </script>
+  </body>
+</html>
