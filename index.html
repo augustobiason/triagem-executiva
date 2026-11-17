@@ -123,6 +123,8 @@
         const STORAGE_CATEGORIES_KEY = "triagem_executiva_categories_v1";
         const STORAGE_LABELS_KEY = "triagem_executiva_labels_v1";
         const STORAGE_LABEL_COLORS_KEY = "triagem_executiva_label_colors_v1";
+        const STORAGE_VIEWED_IDS_KEY = "triagem_executiva_viewed_ids_v1";
+        const STORAGE_DELETED_IDS_KEY = "ids_excluidos";
 
         const LABEL_COLOR_PALETTE = [
           { name: "Azul", hex: "#2563eb" },
@@ -269,6 +271,31 @@
         function saveStoredLabelColors(colors) {
           try {
             localStorage.setItem(STORAGE_LABEL_COLORS_KEY, JSON.stringify(colors));
+          } catch {
+            // Ignore storage errors
+          }
+        }
+
+        function loadStoredIdList(storageKey) {
+          try {
+            const raw = localStorage.getItem(storageKey);
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) return [];
+            const set = new Set();
+            for (const item of parsed) {
+              const cleaned = String(item ?? "").trim();
+              if (cleaned) set.add(cleaned);
+            }
+            return Array.from(set);
+          } catch {
+            return [];
+          }
+        }
+
+        function saveStoredIdList(storageKey, ids) {
+          try {
+            localStorage.setItem(storageKey, JSON.stringify(ids));
           } catch {
             // Ignore storage errors
           }
@@ -753,6 +780,30 @@
           }
         }
 
+        async function postDeleteDemandToGas(id) {
+          const res = await fetch(API_URL, {
+            method: "POST",
+            redirect: "follow",
+            headers: {
+              "Content-Type": "text/plain;charset=utf-8",
+            },
+            body: JSON.stringify({
+              acao: "excluir_demanda",
+              id,
+            }),
+          });
+          if (!res.ok) {
+            throw new Error(`Erro HTTP ${res.status} ao excluir demanda na planilha.`);
+          }
+          const text = await res.text();
+          if (text.trim().startsWith("{")) {
+            const parsed = JSON.parse(text);
+            if (parsed.erro || parsed.error) {
+              throw new Error(String(parsed.erro ?? parsed.error));
+            }
+          }
+        }
+
         async function postSaveRulesToGas(regras) {
           const res = await fetch(API_URL, {
             method: "POST",
@@ -787,6 +838,8 @@
           categories: initialCategories,
           labels: loadStoredLabels(),
           labelColors: loadStoredLabelColors(),
+          viewedIds: loadStoredIdList(STORAGE_VIEWED_IDS_KEY),
+          deletedIds: loadStoredIdList(STORAGE_DELETED_IDS_KEY),
           colorPickerLabel: null,
           isInitialLoading: true,
           isSyncing: false,
@@ -801,18 +854,17 @@
           sortBy: "prazo_asc",
           editingObsTaskId: null,
           obsDraft: "",
-          editingLabelTaskId: null,
-          labelDraft: "",
-          editingCategoryTaskId: null,
-          categoryDraft: "",
+          openCardPicker: null,
+          openModalPickerType: null,
+          pickerNewDraft: "",
+          pendingFocusPickerInput: false,
           expandedThreads: {},
           modalTask: null,
+          confirmDeleteTask: null,
           modalMode: "edit",
           modalShowHistory: false,
           modalRotulos: [],
           modalCategorias: [],
-          modalRotuloDraft: "",
-          modalCategoriaDraft: "",
           editingRuleId: null,
           editRuleDraft: null,
           editRuleRotuloDraft: "",
@@ -841,7 +893,7 @@
           for (const t of tasks) {
             for (const part of getTaskCategories(t)) set.add(part);
           }
-          return Array.from(set);
+          return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
         }
 
         function mergeLabelLists(base, rules, tasks) {
@@ -880,25 +932,37 @@
             (item) => !state.categories.some((c) => c.toLowerCase() === item.toLowerCase())
           );
           if (missing.length > 0) {
-            state.categories = [...state.categories, ...missing];
+            state.categories = [...state.categories, ...missing].sort((a, b) =>
+              a.localeCompare(b, "pt-BR")
+            );
             saveStoredCategories(state.categories);
           }
         }
 
+        function markTaskAsViewed(taskId) {
+          if (!taskId) return;
+          if (!state.viewedIds.includes(taskId)) {
+            state.viewedIds = [...state.viewedIds, taskId];
+            saveStoredIdList(STORAGE_VIEWED_IDS_KEY, state.viewedIds);
+          }
+        }
+
         function applyGasPayload(payload) {
-          state.tasks = payload.demandas;
+          const excluded = new Set(loadStoredIdList(STORAGE_DELETED_IDS_KEY));
+          const visibleDemandas = payload.demandas.filter((d) => !excluded.has(d.id));
+          state.tasks = visibleDemandas;
           state.rules = payload.regras;
           state.categories = mergeCategoryLists(
             state.categories.length > 0 ? state.categories : DEFAULT_CATEGORIES,
             payload.categorias,
             payload.regras,
-            payload.demandas
+            visibleDemandas
           );
           saveStoredCategories(state.categories);
           state.labels = mergeLabelLists(
             state.labels.length > 0 ? state.labels : ["Geral"],
             payload.regras,
-            payload.demandas
+            visibleDemandas
           );
           saveStoredLabels(state.labels);
           if (state.ruleFormCategorias.length === 0) {
@@ -921,7 +985,7 @@
           for (const t of state.tasks) {
             for (const part of getTaskCategories(t)) set.add(part);
           }
-          return Array.from(set);
+          return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
         }
 
         function getActiveLabelFilter(availableLabels) {
@@ -1001,6 +1065,190 @@
             if (urgDiff !== 0) return urgDiff;
             return prazoKey(a).localeCompare(prazoKey(b));
           });
+        }
+
+        function renderCheckboxPopover({
+          scope,
+          taskId,
+          mode,
+          selected,
+          options,
+          isOpen,
+        }) {
+          const isLabel = mode === "label";
+          const fallback = isLabel ? "Geral" : "Outro";
+          const currentSelected = normalizeTagList(selected, fallback);
+          const optionMap = new Map();
+          for (const opt of options || []) {
+            const cleaned = String(opt ?? "").trim();
+            if (cleaned && !optionMap.has(cleaned.toLowerCase())) {
+              optionMap.set(cleaned.toLowerCase(), cleaned);
+            }
+          }
+          for (const sel of currentSelected) {
+            if (sel && !optionMap.has(sel.toLowerCase())) {
+              optionMap.set(sel.toLowerCase(), sel);
+            }
+          }
+          const sortedOptions = Array.from(optionMap.values()).sort((a, b) =>
+            a.localeCompare(b, "pt-BR")
+          );
+
+          const isSelected = (opt) =>
+            currentSelected.some((item) => item.toLowerCase() === opt.toLowerCase());
+
+          const triggerHtml =
+            scope === "card"
+              ? isLabel
+                ? `<button type="button" data-action="toggle-card-picker" data-id="${escapeHtml(
+                    taskId
+                  )}" data-type="label" aria-expanded="${isOpen ? "true" : "false"}"
+                    title="Clique para selecionar ou criar rótulos"
+                    class="inline-flex flex-wrap items-center gap-1.5 rounded-md transition-all cursor-pointer ${
+                      isOpen
+                        ? "ring-2 ring-blue-500/40"
+                        : "hover:ring-2 hover:ring-blue-500/30"
+                    }">
+                    ${currentSelected
+                      .map((lbl) => {
+                        const hex = findLabelColorHex(lbl, state.labelColors);
+                        const dotHtml = hex
+                          ? `<span class="w-2 h-2 rounded-full shrink-0" style="background-color: ${escapeHtml(
+                              hex
+                            )};"></span>`
+                          : `<i data-lucide="tag" class="w-3 h-3 opacity-80 shrink-0"></i>`;
+                        return `<span style="${getLabelBadgeStyleAttr(lbl, state.labelColors)}"
+                          class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium border rounded-md whitespace-nowrap shrink-0">
+                          ${dotHtml}
+                          <span>${escapeHtml(lbl)}</span>
+                        </span>`;
+                      })
+                      .join("")}
+                    <i data-lucide="chevron-down" class="w-3 h-3 shrink-0 transition-transform ${
+                      isOpen ? "rotate-180 text-blue-600" : "text-slate-400"
+                    }"></i>
+                  </button>`
+                : `<button type="button" data-action="toggle-card-picker" data-id="${escapeHtml(
+                    taskId
+                  )}" data-type="category" aria-expanded="${isOpen ? "true" : "false"}"
+                    title="Clique para selecionar ou criar categorias"
+                    class="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium border rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      isOpen
+                        ? "bg-blue-50 text-blue-700 border-blue-300 ring-2 ring-blue-500/20"
+                        : "text-slate-700 bg-white hover:bg-blue-50 hover:text-blue-700 border-slate-200 hover:border-blue-200"
+                    }">
+                    <i data-lucide="folder" class="w-3 h-3 shrink-0 ${
+                      isOpen ? "text-blue-600" : "text-slate-400"
+                    }"></i>
+                    <span>${escapeHtml(currentSelected.join(" / "))}</span>
+                    <i data-lucide="chevron-down" class="w-3 h-3 shrink-0 transition-transform ${
+                      isOpen ? "rotate-180 text-blue-600" : "text-slate-400"
+                    }"></i>
+                  </button>`
+              : `<button type="button" data-action="toggle-modal-picker" data-type="${escapeHtml(
+                  mode
+                )}" aria-expanded="${isOpen ? "true" : "false"}"
+                  class="w-full min-h-[38px] px-2.5 py-1.5 bg-white border rounded-lg flex items-center justify-between gap-2 text-left transition-colors cursor-pointer ${
+                    isOpen
+                      ? "border-blue-600 ring-2 ring-blue-600/20"
+                      : "border-slate-200 hover:border-slate-300"
+                  }">
+                  <div class="flex flex-wrap items-center gap-1.5 flex-1 min-w-0">
+                    ${currentSelected
+                      .map((item) => {
+                        if (isLabel) {
+                          const hex = findLabelColorHex(item, state.labelColors);
+                          const dotHtml = hex
+                            ? `<span class="w-2 h-2 rounded-full shrink-0" style="background-color: ${escapeHtml(
+                                hex
+                              )};"></span>`
+                            : "";
+                          return `<span style="${getLabelBadgeStyleAttr(item, state.labelColors)}"
+                            class="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium border rounded-md whitespace-nowrap">
+                            ${dotHtml}
+                            <span>${escapeHtml(item)}</span>
+                          </span>`;
+                        }
+                        return `<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 rounded-md whitespace-nowrap">
+                          <span>${escapeHtml(item)}</span>
+                        </span>`;
+                      })
+                      .join("")}
+                  </div>
+                  <i data-lucide="chevron-down" class="w-4 h-4 shrink-0 transition-transform ${
+                    isOpen ? "rotate-180 text-blue-600" : "text-slate-400"
+                  }"></i>
+                </button>`;
+
+          const placeholder = isLabel ? "Novo rótulo..." : "Nova categoria...";
+          const ariaAdd = isLabel ? "Novo rótulo" : "Nova categoria";
+          const popoverWidthCls = scope === "card" ? "w-72" : "w-full min-w-[260px]";
+
+          const popoverHtml = isOpen
+            ? `<div role="dialog" aria-label="${
+                isLabel ? "Selecionar rótulos" : "Selecionar categorias"
+              }" class="absolute left-0 top-full mt-1.5 z-50 ${popoverWidthCls} bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+                <div class="p-2 border-b border-slate-100 bg-slate-50/80 flex items-center gap-1.5">
+                  <input type="text" data-role="picker-new-input"
+                    value="${escapeHtml(state.pickerNewDraft)}"
+                    placeholder="${placeholder}" aria-label="${ariaAdd}"
+                    class="flex-1 min-w-0 px-2.5 py-1.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                  <button type="button" data-action="picker-add-option"
+                    aria-label="Adicionar ${isLabel ? "rótulo" : "categoria"}"
+                    title="Adicionar e marcar"
+                    class="inline-flex items-center justify-center p-1.5 text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors shrink-0 cursor-pointer">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                  </button>
+                </div>
+                <div data-role="picker-list" class="max-h-56 overflow-y-auto p-1.5 divide-y divide-slate-50">
+                  ${sortedOptions
+                    .map((opt) => {
+                      const checked = isSelected(opt);
+                      const hex = isLabel ? findLabelColorHex(opt, state.labelColors) : undefined;
+                      const optionDisplay = isLabel
+                        ? `<span class="inline-flex items-center gap-2 min-w-0 flex-1">
+                            <span class="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
+                              style="background-color: ${escapeHtml(hex || "#64748b")};"></span>
+                            <span style="${getLabelBadgeStyleAttr(opt, state.labelColors)}"
+                              class="inline-flex items-center px-2 py-0.5 text-xs font-medium border rounded-md truncate">
+                              ${escapeHtml(opt)}
+                            </span>
+                          </span>`
+                        : `<span class="text-xs font-medium truncate flex-1 ${
+                            checked ? "text-slate-900" : "text-slate-700"
+                          }">${escapeHtml(opt)}</span>`;
+                      return `<label class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors ${
+                        checked ? "bg-blue-50/70" : "hover:bg-slate-50"
+                      }">
+                        <input type="checkbox" data-role="picker-checkbox" data-value="${escapeHtml(
+                          opt
+                        )}" ${checked ? "checked" : ""}
+                          class="w-3.5 h-3.5 rounded border-slate-300 text-blue-700 focus:ring-blue-600/30 shrink-0 cursor-pointer" />
+                        ${optionDisplay}
+                        ${
+                          checked
+                            ? '<i data-lucide="check" class="w-3.5 h-3.5 text-blue-700 shrink-0"></i>'
+                            : ""
+                        }
+                      </label>`;
+                    })
+                    .join("")}
+                </div>
+                <div class="px-2.5 py-1.5 border-t border-slate-100 bg-slate-50/60 flex items-center justify-between text-[11px] text-slate-500">
+                  <span class="tabular-nums">${currentSelected.length} ${
+                    currentSelected.length === 1 ? "selecionado" : "selecionados"
+                  }</span>
+                  <button type="button" data-action="close-picker"
+                    class="font-medium text-blue-700 hover:text-blue-900 cursor-pointer">
+                    Concluir
+                  </button>
+                </div>
+              </div>`
+            : "";
+
+          return `<div class="relative ${
+            scope === "card" ? "inline-flex items-center" : "w-full"
+          }" data-picker-root>${triggerHtml}${popoverHtml}</div>`;
         }
 
         function renderMultiTagInput({
@@ -1288,22 +1536,58 @@
               </div>
             `;
           } else {
+            const viewedSet = new Set(state.viewedIds);
             listHtml = `<div class="divide-y divide-slate-200">
               ${filtered
                 .map((task) => {
                   const currentStatus = task.status ?? (task.completed ? "Concluído" : "A Fazer");
                   const isCompleted = currentStatus === "Concluído";
                   const isEditingObs = state.editingObsTaskId === task.id;
-                  const isEditingLabel = state.editingLabelTaskId === task.id;
-                  const isEditingCategory = state.editingCategoryTaskId === task.id;
+                  const isNewDemand = currentStatus === "A Fazer" && !viewedSet.has(task.id);
+                  const isLabelPickerOpen = Boolean(
+                    state.openCardPicker &&
+                      state.openCardPicker.taskId === task.id &&
+                      state.openCardPicker.type === "label"
+                  );
+                  const isCategoryPickerOpen = Boolean(
+                    state.openCardPicker &&
+                      state.openCardPicker.taskId === task.id &&
+                      state.openCardPicker.type === "category"
+                  );
                   const historyList = task.historico_mensagens || [];
                   const isExpanded = Boolean(state.expandedThreads[task.id]);
 
+                  const newDemandBanner =
+                    isNewDemand && !task.hasNewMessage
+                      ? `<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <span class="inline-flex items-center gap-2 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md">
+                            <span class="relative flex h-2 w-2 shrink-0" aria-hidden="true">
+                              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                              <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                            </span>
+                            <span>Novo</span>
+                          </span>
+                          <button type="button" data-action="mark-viewed" data-id="${escapeHtml(task.id)}"
+                            class="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-900 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
+                            <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                            <span>Marcar como visto</span>
+                          </button>
+                        </div>`
+                      : "";
+
                   const newMessageBanner = task.hasNewMessage
                     ? `<div class="mb-3 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg flex flex-wrap items-center justify-between gap-2">
-                        <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-800">
+                        <span class="inline-flex items-center gap-2 text-xs font-semibold text-blue-800">
                           <i data-lucide="bell-ring" class="w-3.5 h-3.5 text-blue-700 shrink-0"></i>
                           <span>Nova mensagem na conversa</span>
+                          ${
+                            isNewDemand
+                              ? `<span class="inline-flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded">
+                                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true"></span>
+                                  <span>Novo</span>
+                                </span>`
+                              : ""
+                          }
                         </span>
                         <button type="button" data-action="mark-seen" data-id="${escapeHtml(task.id)}"
                           class="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
@@ -1436,22 +1720,17 @@
 
                   const taskLabels = getTaskLabels(task);
                   const taskCategories = getTaskCategories(task);
-                  const labelBadgesHtml = taskLabels
-                    .map(
-                      (lbl) => `
-                        <span style="${getLabelBadgeStyleAttr(lbl, state.labelColors)}"
-                          class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium border rounded-md whitespace-nowrap shrink-0">
-                          <i data-lucide="tag" class="w-3 h-3 opacity-80"></i>
-                          <span>${escapeHtml(lbl)}</span>
-                        </span>
-                      `
-                    )
-                    .join("");
+                  const cardSurfaceClass = task.hasNewMessage
+                    ? "border-l-4 border-l-blue-600 bg-blue-50/35"
+                    : isNewDemand
+                    ? "border-l-4 border-l-emerald-500 bg-emerald-50/20"
+                    : isCompleted
+                    ? "bg-slate-50/40"
+                    : "";
 
                   return `
-                    <article class="p-5 sm:px-6 transition-colors hover:bg-slate-50/60 ${
-                      task.hasNewMessage ? "bg-blue-50/35" : isCompleted ? "bg-slate-50/40" : ""
-                    }">
+                    <article class="p-5 sm:px-6 transition-colors hover:bg-slate-50/60 ${cardSurfaceClass}">
+                      ${newDemandBanner}
                       ${newMessageBanner}
                       <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
                         <div class="min-w-0 flex-1 space-y-2.5">
@@ -1459,60 +1738,23 @@
                             ${renderStatusBadge(currentStatus)}
                             ${renderUrgencyIndicator(task.urgencia)}
                             <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
-                            ${
-                              isEditingLabel
-                                ? `<span class="inline-flex items-center gap-1">
-                                    <input type="text" list="queue-rotulo-options"
-                                      data-role="label-input" data-id="${escapeHtml(task.id)}"
-                                      aria-label="Editar rótulos da demanda"
-                                      value="${escapeHtml(state.labelDraft)}"
-                                      placeholder="Separe por vírgula..."
-                                      class="w-48 px-2 py-0.5 text-xs font-medium text-slate-900 bg-white border border-blue-400 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
-                                    <button type="button" data-action="save-label" data-id="${escapeHtml(task.id)}"
-                                      aria-label="Salvar rótulos"
-                                      class="p-0.5 text-emerald-700 hover:bg-emerald-50 rounded cursor-pointer">
-                                      <i data-lucide="check" class="w-3.5 h-3.5"></i>
-                                    </button>
-                                    <button type="button" data-action="cancel-label" data-label-action="cancel"
-                                      aria-label="Cancelar edição dos rótulos"
-                                      class="p-0.5 text-slate-500 hover:bg-slate-100 rounded cursor-pointer">
-                                      <i data-lucide="x" class="w-3.5 h-3.5"></i>
-                                    </button>
-                                  </span>`
-                                : `<button type="button" data-action="edit-label" data-id="${escapeHtml(task.id)}"
-                                    title="Clique para editar os rótulos (separe múltiplos por vírgula)"
-                                    class="inline-flex flex-wrap items-center gap-1.5 rounded-md hover:ring-2 hover:ring-blue-500/30 transition-all cursor-pointer">
-                                    ${labelBadgesHtml}
-                                  </button>`
-                            }
+                            ${renderCheckboxPopover({
+                              scope: "card",
+                              taskId: task.id,
+                              mode: "label",
+                              selected: taskLabels,
+                              options: availableLabels,
+                              isOpen: isLabelPickerOpen,
+                            })}
                             <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
-                            ${
-                              isEditingCategory
-                                ? `<span class="inline-flex items-center gap-1">
-                                    <input type="text" list="queue-categoria-options"
-                                      data-role="category-input" data-id="${escapeHtml(task.id)}"
-                                      aria-label="Editar categorias da demanda"
-                                      value="${escapeHtml(state.categoryDraft)}"
-                                      placeholder="Separe por vírgula..."
-                                      class="w-48 px-2 py-0.5 text-xs font-medium text-slate-900 bg-white border border-blue-400 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
-                                    <button type="button" data-action="save-category" data-id="${escapeHtml(task.id)}"
-                                      aria-label="Salvar categorias"
-                                      class="p-0.5 text-emerald-700 hover:bg-emerald-50 rounded cursor-pointer">
-                                      <i data-lucide="check" class="w-3.5 h-3.5"></i>
-                                    </button>
-                                    <button type="button" data-action="cancel-category" data-category-action="cancel"
-                                      aria-label="Cancelar edição das categorias"
-                                      class="p-0.5 text-slate-500 hover:bg-slate-100 rounded cursor-pointer">
-                                      <i data-lucide="x" class="w-3.5 h-3.5"></i>
-                                    </button>
-                                  </span>`
-                                : `<button type="button" data-action="edit-category" data-id="${escapeHtml(task.id)}"
-                                    title="Clique para editar as categorias (separe múltiplas por vírgula)"
-                                    class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-slate-700 bg-white hover:bg-blue-50 hover:text-blue-700 border border-slate-200 hover:border-blue-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                                    <i data-lucide="folder" class="w-3 h-3 text-slate-400"></i>
-                                    <span>${escapeHtml(taskCategories.join(" / "))}</span>
-                                  </button>`
-                            }
+                            ${renderCheckboxPopover({
+                              scope: "card",
+                              taskId: task.id,
+                              mode: "category",
+                              selected: taskCategories,
+                              options: availableCategories,
+                              isOpen: isCategoryPickerOpen,
+                            })}
                             <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
                             <span title="${escapeHtml(task.prazo || "")}"
                               class="inline-flex items-center gap-1 font-mono tabular-nums text-xs text-slate-700">
@@ -1570,8 +1812,8 @@
                             <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                             <span>Editar</span>
                           </button>
-                          <button type="button" data-action="delete-task" data-id="${escapeHtml(task.id)}"
-                            title="Remover demanda" aria-label="Remover ${escapeHtml(task.titulo)}"
+                          <button type="button" data-action="request-delete-task" data-id="${escapeHtml(task.id)}"
+                            title="Excluir demanda definitivamente" aria-label="Excluir ${escapeHtml(task.titulo)}"
                             class="p-1.5 text-slate-400 hover:text-red-700 rounded-lg hover:bg-red-50 transition-colors cursor-pointer">
                             <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                           </button>
@@ -1667,12 +1909,6 @@
                   </div>
                 </div>
               </div>
-              <datalist id="queue-rotulo-options">
-                ${availableLabels.map((lbl) => `<option value="${escapeHtml(lbl)}"></option>`).join("")}
-              </datalist>
-              <datalist id="queue-categoria-options">
-                ${availableCategories.map((cat) => `<option value="${escapeHtml(cat)}"></option>`).join("")}
-              </datalist>
               ${listHtml}
             </section>
           `;
@@ -2266,46 +2502,30 @@
 
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label for="modal-rotulo" class="block text-xs font-medium text-slate-700 mb-1">Rótulos</label>
-                      ${renderMultiTagInput({
-                        context: "modal-rotulo",
-                        tags: state.modalRotulos,
-                        draft: state.modalRotuloDraft,
-                        datalistId: "modal-rotulo-options",
-                        placeholder: "Adicionar rótulo e Enter...",
-                        fallbackDisplay: "Geral",
-                        useLabelColors: true,
-                        compact: false,
-                        inputId: "modal-rotulo",
-                        ariaLabel: "Rótulos da demanda",
+                      <span class="block text-xs font-medium text-slate-700 mb-1">Rótulos</span>
+                      ${renderCheckboxPopover({
+                        scope: "modal",
+                        mode: "label",
+                        selected: state.modalRotulos,
+                        options: labels,
+                        isOpen: state.openModalPickerType === "label",
                       })}
-                      <datalist id="modal-rotulo-options">
-                        ${labels.map((l) => `<option value="${escapeHtml(l)}"></option>`).join("")}
-                      </datalist>
                       <p class="text-[11px] text-slate-500 mt-1">
-                        Adicione um ou mais rótulos (Enter, vírgula ou Incluir).
+                        Marque múltiplos rótulos ou crie um novo na lista.
                       </p>
                     </div>
 
                     <div>
-                      <label for="modal-categoria" class="block text-xs font-medium text-slate-700 mb-1">Categorias</label>
-                      ${renderMultiTagInput({
-                        context: "modal-categoria",
-                        tags: state.modalCategorias,
-                        draft: state.modalCategoriaDraft,
-                        datalistId: "modal-categoria-options",
-                        placeholder: "Adicionar categoria e Enter...",
-                        fallbackDisplay: "Outro",
-                        useLabelColors: false,
-                        compact: false,
-                        inputId: "modal-categoria",
-                        ariaLabel: "Categorias da demanda",
+                      <span class="block text-xs font-medium text-slate-700 mb-1">Categorias</span>
+                      ${renderCheckboxPopover({
+                        scope: "modal",
+                        mode: "category",
+                        selected: state.modalCategorias,
+                        options: cats,
+                        isOpen: state.openModalPickerType === "category",
                       })}
-                      <datalist id="modal-categoria-options">
-                        ${cats.map((c) => `<option value="${escapeHtml(c)}"></option>`).join("")}
-                      </datalist>
                       <p class="text-[11px] text-slate-500 mt-1">
-                        Adicione uma ou mais categorias (Enter, vírgula ou Incluir).
+                        Marque múltiplas categorias ou crie uma nova na lista.
                       </p>
                     </div>
                   </div>
@@ -2343,17 +2563,65 @@
 
                   ${historyHtml}
 
-                  <div class="pt-3 border-t border-slate-100 flex items-center justify-end gap-2.5">
-                    <button type="button" data-action="close-modal"
-                      class="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                      Cancelar
-                    </button>
-                    <button type="submit"
-                      class="px-4 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                      Salvar alterações
-                    </button>
+                  <div class="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5">
+                    <div>
+                      ${
+                        state.modalMode === "edit"
+                          ? `<button type="button" data-action="request-delete-task" data-id="${escapeHtml(task.id)}"
+                              class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-white border border-red-200 rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                              <span>Excluir demanda</span>
+                            </button>`
+                          : ""
+                      }
+                    </div>
+                    <div class="flex items-center gap-2.5 ml-auto">
+                      <button type="button" data-action="close-modal"
+                        class="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                        Cancelar
+                      </button>
+                      <button type="submit"
+                        class="px-4 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                        Salvar alterações
+                      </button>
+                    </div>
                   </div>
                 </form>
+              </div>
+            </div>
+          `;
+        }
+
+        function renderConfirmDeleteModal() {
+          const task = state.confirmDeleteTask;
+          if (!task) return "";
+          return `
+            <div data-action="confirm-delete-backdrop" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40" role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title">
+              <div class="bg-white border border-slate-200 rounded-xl w-full max-w-md shadow-lg p-6 space-y-4">
+                <div class="flex items-start gap-3">
+                  <div class="p-2 rounded-lg bg-red-50 text-red-700 shrink-0">
+                    <i data-lucide="trash-2" class="w-5 h-5"></i>
+                  </div>
+                  <div class="min-w-0">
+                    <h2 id="confirm-delete-title" class="text-base font-semibold text-slate-900">
+                      Excluir demanda definitivamente?
+                    </h2>
+                    <p class="text-xs text-slate-600 mt-1 leading-relaxed">
+                      A demanda <span class="font-semibold text-slate-800">“${escapeHtml(task.titulo)}”</span> será removida da fila e apagada permanentemente da Planilha Google.
+                    </p>
+                  </div>
+                </div>
+                <div class="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                  <button type="button" data-action="cancel-delete-task"
+                    class="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer">
+                    Cancelar
+                  </button>
+                  <button type="button" data-action="confirm-delete-task" data-id="${escapeHtml(task.id)}"
+                    class="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors cursor-pointer">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                    <span>Excluir definitivamente</span>
+                  </button>
+                </div>
               </div>
             </div>
           `;
@@ -2407,6 +2675,14 @@
               </div>`
             : "";
 
+          const existingPickerList = document.querySelector('[data-role="picker-list"]');
+          const savedPickerScrollTop = existingPickerList ? existingPickerList.scrollTop : null;
+          const activeEl = document.activeElement;
+          const wasPickerInputFocused = Boolean(
+            activeEl && activeEl.dataset && activeEl.dataset.role === "picker-new-input"
+          );
+          const savedPickerSelectionStart = wasPickerInputFocused ? activeEl.selectionStart : null;
+
           const root = document.getElementById("app");
           root.innerHTML = `
             <aside class="hidden lg:block w-64 shrink-0 bg-white border-r border-slate-200">
@@ -2445,6 +2721,7 @@
               </main>
             </div>
             ${renderModal()}
+            ${renderConfirmDeleteModal()}
           `;
 
           if (window.lucide && typeof window.lucide.createIcons === "function") {
@@ -2460,19 +2737,22 @@
             }
           }
 
-          if (state.editingLabelTaskId) {
-            const labelInput = document.querySelector(`[data-role="label-input"][data-id="${CSS.escape(state.editingLabelTaskId)}"]`);
-            if (labelInput) {
-              labelInput.focus();
-              labelInput.select();
-            }
+          const nextPickerList = document.querySelector('[data-role="picker-list"]');
+          if (nextPickerList && savedPickerScrollTop !== null) {
+            nextPickerList.scrollTop = savedPickerScrollTop;
           }
 
-          if (state.editingCategoryTaskId) {
-            const categoryInput = document.querySelector(`[data-role="category-input"][data-id="${CSS.escape(state.editingCategoryTaskId)}"]`);
-            if (categoryInput) {
-              categoryInput.focus();
-              categoryInput.select();
+          if (state.pendingFocusPickerInput || wasPickerInputFocused) {
+            state.pendingFocusPickerInput = false;
+            const pickerInput = document.querySelector('[data-role="picker-new-input"]');
+            if (pickerInput) {
+              pickerInput.focus();
+              if (savedPickerSelectionStart !== null) {
+                pickerInput.setSelectionRange(
+                  savedPickerSelectionStart,
+                  savedPickerSelectionStart
+                );
+              }
             }
           }
 
@@ -2510,6 +2790,22 @@
           }
         }
 
+        async function persistDeleteDemand(taskId) {
+          state.isSaving = true;
+          state.apiError = null;
+          render();
+          try {
+            await postDeleteDemandToGas(taskId);
+            state.syncFeedback = `Demanda excluída às ${formatCurrentTime()}`;
+          } catch (err) {
+            state.apiError =
+              err instanceof Error ? err.message : "Erro ao excluir demanda na planilha.";
+          } finally {
+            state.isSaving = false;
+            render();
+          }
+        }
+
         async function persistNewDemand(newTask) {
           state.isSaving = true;
           state.apiError = null;
@@ -2517,7 +2813,10 @@
           try {
             const responsePayload = await postCreateDemandToGas(newTask);
             if (responsePayload && responsePayload.demandas) {
-              const nextTasks = responsePayload.demandas;
+              const excluded = new Set(loadStoredIdList(STORAGE_DELETED_IDS_KEY));
+              const nextTasks = responsePayload.demandas.filter(
+                (d) => !excluded.has(d.id)
+              );
               const nextRules = responsePayload.regras || state.rules;
               state.tasks = nextTasks;
               if (responsePayload.regras) {
@@ -2828,63 +3127,124 @@
           void persistDemand(updated);
         }
 
-        function commitLabel(taskId) {
-          const task = state.tasks.find((t) => t.id === taskId);
-          state.editingLabelTaskId = null;
-          if (!task) {
+        function togglePickerOption(optionValue) {
+          if (state.openModalPickerType && state.modalTask) {
+            const isLabel = state.openModalPickerType === "label";
+            const fallback = isLabel ? "Geral" : "Outro";
+            const current = normalizeTagList(
+              isLabel ? state.modalRotulos : state.modalCategorias,
+              fallback
+            );
+            const exists = current.some(
+              (item) => item.toLowerCase() === optionValue.toLowerCase()
+            );
+            let nextList;
+            if (exists) {
+              const filtered = current.filter(
+                (item) => item.toLowerCase() !== optionValue.toLowerCase()
+              );
+              nextList = filtered.length > 0 ? filtered : [fallback];
+            } else {
+              nextList = normalizeTagList([...current, optionValue], fallback);
+            }
+            if (isLabel) {
+              state.modalRotulos = nextList;
+            } else {
+              state.modalCategorias = nextList;
+            }
             render();
             return;
           }
-          const nextList = parseMultiValueField(state.labelDraft, "Geral");
-          const nextJoined = nextList.join(", ");
-          const currentJoined = getTaskLabels(task).join(", ");
-          if (currentJoined === nextJoined) {
-            render();
-            return;
+
+          if (state.openCardPicker) {
+            const { taskId, type } = state.openCardPicker;
+            const task = state.tasks.find((t) => t.id === taskId);
+            if (!task) return;
+            const isLabel = type === "label";
+            const fallback = isLabel ? "Geral" : "Outro";
+            const current = isLabel ? getTaskLabels(task) : getTaskCategories(task);
+            const exists = current.some(
+              (item) => item.toLowerCase() === optionValue.toLowerCase()
+            );
+            let nextList;
+            if (exists) {
+              const filtered = current.filter(
+                (item) => item.toLowerCase() !== optionValue.toLowerCase()
+              );
+              nextList = filtered.length > 0 ? filtered : [fallback];
+            } else {
+              nextList = normalizeTagList([...current, optionValue], fallback);
+            }
+            const nextJoined = nextList.join(", ");
+            if (nextJoined === current.join(", ")) {
+              render();
+              return;
+            }
+            const updated = isLabel
+              ? { ...task, rotulos: nextList, rotulo_aplicado: nextJoined }
+              : { ...task, categorias: nextList, categoria: nextJoined };
+            state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+            void persistDemand(updated);
           }
-          ensureLabelsTracked(nextList);
-          const updated = { ...task, rotulos: nextList, rotulo_aplicado: nextJoined };
-          state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
-          void persistDemand(updated);
         }
 
-        function commitCategory(taskId) {
-          const task = state.tasks.find((t) => t.id === taskId);
-          state.editingCategoryTaskId = null;
-          if (!task) {
+        function addNewOptionFromPicker() {
+          const trimmed = state.pickerNewDraft.trim();
+          if (!trimmed) {
+            state.pendingFocusPickerInput = true;
             render();
             return;
           }
-          const nextList = parseMultiValueField(state.categoryDraft, "Outro");
-          const nextJoined = nextList.join(", ");
-          const currentJoined = getTaskCategories(task).join(", ");
-          if (currentJoined === nextJoined) {
+
+          if (state.openModalPickerType && state.modalTask) {
+            const isLabel = state.openModalPickerType === "label";
+            const fallback = isLabel ? "Geral" : "Outro";
+            if (isLabel) {
+              ensureLabelsTracked([trimmed]);
+              state.modalRotulos = normalizeTagList([...state.modalRotulos, trimmed], fallback);
+            } else {
+              ensureCategoriesTracked([trimmed]);
+              state.modalCategorias = normalizeTagList(
+                [...state.modalCategorias, trimmed],
+                fallback
+              );
+            }
+            state.pickerNewDraft = "";
+            state.pendingFocusPickerInput = true;
             render();
             return;
           }
-          ensureCategoriesTracked(nextList);
-          const updated = { ...task, categorias: nextList, categoria: nextJoined };
-          state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
-          void persistDemand(updated);
+
+          if (state.openCardPicker) {
+            const { taskId, type } = state.openCardPicker;
+            const task = state.tasks.find((t) => t.id === taskId);
+            if (!task) return;
+            const isLabel = type === "label";
+            const fallback = isLabel ? "Geral" : "Outro";
+            if (isLabel) {
+              ensureLabelsTracked([trimmed]);
+            } else {
+              ensureCategoriesTracked([trimmed]);
+            }
+            const current = isLabel ? getTaskLabels(task) : getTaskCategories(task);
+            const nextList = normalizeTagList([...current, trimmed], fallback);
+            const nextJoined = nextList.join(", ");
+            state.pickerNewDraft = "";
+            state.pendingFocusPickerInput = true;
+
+            if (nextJoined === current.join(", ")) {
+              render();
+              return;
+            }
+            const updated = isLabel
+              ? { ...task, rotulos: nextList, rotulo_aplicado: nextJoined }
+              : { ...task, categorias: nextList, categoria: nextJoined };
+            state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+            void persistDemand(updated);
+          }
         }
 
         function getTagContextConfig(context) {
-          if (context === "modal-rotulo") {
-            return {
-              getList: () => state.modalRotulos,
-              setList: (v) => { state.modalRotulos = v; },
-              getDraft: () => state.modalRotuloDraft,
-              setDraft: (v) => { state.modalRotuloDraft = v; },
-            };
-          }
-          if (context === "modal-categoria") {
-            return {
-              getList: () => state.modalCategorias,
-              setList: (v) => { state.modalCategorias = v; },
-              getDraft: () => state.modalCategoriaDraft,
-              setDraft: (v) => { state.modalCategoriaDraft = v; },
-            };
-          }
           if (context === "rule-rotulo") {
             return {
               getList: () => state.ruleFormRotulos,
@@ -2978,8 +3338,12 @@
             render();
           } else if (action === "export-csv") {
             exportCsv();
+          } else if (action === "mark-viewed") {
+            markTaskAsViewed(btn.dataset.id);
+            render();
           } else if (action === "mark-seen") {
             const taskId = btn.dataset.id;
+            markTaskAsViewed(taskId);
             const target = state.tasks.find((t) => t.id === taskId);
             if (target) {
               const updated = { ...target, hasNewMessage: false };
@@ -2989,61 +3353,69 @@
           } else if (action === "edit-obs") {
             const task = state.tasks.find((t) => t.id === btn.dataset.id);
             if (task) {
+              markTaskAsViewed(task.id);
               state.editingObsTaskId = task.id;
               state.obsDraft = task.observacoes || "";
               render();
             }
           } else if (action === "save-obs") {
+            markTaskAsViewed(btn.dataset.id);
             commitObs(btn.dataset.id);
           } else if (action === "cancel-obs") {
             state.editingObsTaskId = null;
             state.obsDraft = "";
             render();
-          } else if (action === "edit-label") {
-            const task = state.tasks.find((t) => t.id === btn.dataset.id);
-            if (task) {
-              state.editingLabelTaskId = task.id;
-              state.labelDraft = getTaskLabels(task).join(", ");
-              render();
-            }
-          } else if (action === "save-label") {
-            commitLabel(btn.dataset.id);
-          } else if (action === "cancel-label") {
-            state.editingLabelTaskId = null;
-            state.labelDraft = "";
+          } else if (action === "toggle-card-picker") {
+            const taskId = btn.dataset.id;
+            const type = btn.dataset.type;
+            markTaskAsViewed(taskId);
+            const isSame = Boolean(
+              state.openCardPicker &&
+                state.openCardPicker.taskId === taskId &&
+                state.openCardPicker.type === type
+            );
+            state.openModalPickerType = null;
+            state.pickerNewDraft = "";
+            state.openCardPicker = isSame ? null : { taskId, type };
             render();
-          } else if (action === "edit-category") {
-            const task = state.tasks.find((t) => t.id === btn.dataset.id);
-            if (task) {
-              state.editingCategoryTaskId = task.id;
-              state.categoryDraft = getTaskCategories(task).join(", ");
-              render();
-            }
-          } else if (action === "save-category") {
-            commitCategory(btn.dataset.id);
-          } else if (action === "cancel-category") {
-            state.editingCategoryTaskId = null;
-            state.categoryDraft = "";
+          } else if (action === "toggle-modal-picker") {
+            const type = btn.dataset.type;
+            state.openCardPicker = null;
+            state.pickerNewDraft = "";
+            state.openModalPickerType = state.openModalPickerType === type ? null : type;
             render();
+          } else if (action === "close-picker") {
+            state.openCardPicker = null;
+            state.openModalPickerType = null;
+            state.pickerNewDraft = "";
+            render();
+          } else if (action === "picker-add-option") {
+            addNewOptionFromPicker();
           } else if (action === "toggle-thread") {
             const id = btn.dataset.id;
+            markTaskAsViewed(id);
             state.expandedThreads[id] = !state.expandedThreads[id];
             render();
           } else if (action === "open-edit-modal") {
             const task = state.tasks.find((t) => t.id === btn.dataset.id);
             if (task) {
+              markTaskAsViewed(task.id);
+              state.openCardPicker = null;
+              state.openModalPickerType = null;
+              state.pickerNewDraft = "";
               state.modalTask = { ...task };
               state.modalMode = "edit";
               state.modalShowHistory = false;
               state.modalRotulos = getTaskLabels(task);
               state.modalCategorias = getTaskCategories(task);
-              state.modalRotuloDraft = "";
-              state.modalCategoriaDraft = "";
               render();
             }
           } else if (action === "open-create-modal") {
             const nowDt = getNowIsoDateTime();
             const defaultCat = state.categories[0] || "Outro";
+            state.openCardPicker = null;
+            state.openModalPickerType = null;
+            state.pickerNewDraft = "";
             state.modalTask = {
               id: `manual-${uuid()}`,
               triageId: "manual",
@@ -3073,15 +3445,17 @@
             state.modalShowHistory = false;
             state.modalRotulos = ["Geral"];
             state.modalCategorias = [defaultCat];
-            state.modalRotuloDraft = "";
-            state.modalCategoriaDraft = "";
             render();
           } else if (action === "close-modal") {
             state.modalTask = null;
+            state.openModalPickerType = null;
+            state.pickerNewDraft = "";
             render();
           } else if (action === "modal-backdrop") {
             if (e.target === btn) {
               state.modalTask = null;
+              state.openModalPickerType = null;
+              state.pickerNewDraft = "";
               render();
             }
           } else if (action === "clear-modal-prazo") {
@@ -3099,10 +3473,34 @@
           } else if (action === "remove-tag-item") {
             removeTagFromContext(btn.dataset.context, btn.dataset.value);
             render();
-          } else if (action === "delete-task") {
+          } else if (action === "request-delete-task") {
             const id = btn.dataset.id;
-            state.tasks = state.tasks.filter((t) => t.id !== id);
+            const task = state.tasks.find((t) => t.id === id);
+            if (task) {
+              markTaskAsViewed(id);
+              state.openCardPicker = null;
+              state.openModalPickerType = null;
+              state.modalTask = null;
+              state.confirmDeleteTask = task;
+              render();
+            }
+          } else if (action === "cancel-delete-task") {
+            state.confirmDeleteTask = null;
             render();
+          } else if (action === "confirm-delete-backdrop") {
+            if (e.target === btn) {
+              state.confirmDeleteTask = null;
+              render();
+            }
+          } else if (action === "confirm-delete-task") {
+            const id = btn.dataset.id;
+            state.confirmDeleteTask = null;
+            state.tasks = state.tasks.filter((t) => t.id !== id);
+            if (!state.deletedIds.includes(id)) {
+              state.deletedIds = [...state.deletedIds, id];
+              saveStoredIdList(STORAGE_DELETED_IDS_KEY, state.deletedIds);
+            }
+            void persistDeleteDemand(id);
           } else if (action === "toggle-rule") {
             const id = btn.dataset.id;
             const next = state.rules.map((r) => (r.id === id ? { ...r, ativo: !r.ativo } : r));
@@ -3222,6 +3620,7 @@
             const nextStatus = target.value;
             const task = state.tasks.find((t) => t.id === taskId);
             if (!task) return;
+            markTaskAsViewed(taskId);
             const updated = {
               ...task,
               status: nextStatus,
@@ -3246,6 +3645,9 @@
               setLabelColor(lbl, target.value);
               render();
             }
+          } else if (target.dataset.role === "picker-checkbox") {
+            const val = target.dataset.value;
+            if (val) togglePickerOption(val);
           } else if (target.id === "rule-match-type") {
             state.ruleFormMatchType = target.value;
           }
@@ -3264,15 +3666,14 @@
             }
           } else if (target.dataset.role === "waiting-note") {
             const id = target.dataset.id;
+            markTaskAsViewed(id);
             state.tasks = state.tasks.map((t) =>
               t.id === id ? { ...t, statusNote: target.value } : t
             );
           } else if (target.dataset.role === "obs-input") {
             state.obsDraft = target.value;
-          } else if (target.dataset.role === "label-input") {
-            state.labelDraft = target.value;
-          } else if (target.dataset.role === "category-input") {
-            state.categoryDraft = target.value;
+          } else if (target.dataset.role === "picker-new-input") {
+            state.pickerNewDraft = target.value;
           } else if (target.dataset.role === "label-item-input") {
             state.labelItemDraft = target.value;
           } else if (target.dataset.role === "edit-rule-matchValue" && state.editRuleDraft) {
@@ -3317,18 +3718,6 @@
                 return;
               }
               commitObs(target.dataset.id);
-            } else if (target.dataset.role === "label-input") {
-              const related = e.relatedTarget;
-              if (related && related.dataset && related.dataset.labelAction === "cancel") {
-                return;
-              }
-              commitLabel(target.dataset.id);
-            } else if (target.dataset.role === "category-input") {
-              const related = e.relatedTarget;
-              if (related && related.dataset && related.dataset.categoryAction === "cancel") {
-                return;
-              }
-              commitCategory(target.dataset.id);
             } else if (target.dataset.role === "tag-input") {
               const ctx = target.dataset.context;
               const related = e.relatedTarget;
@@ -3368,24 +3757,17 @@
               state.obsDraft = "";
               render();
             }
-          } else if (target.dataset.role === "label-input") {
+          } else if (target.dataset.role === "picker-new-input") {
             if (e.key === "Enter") {
               e.preventDefault();
-              commitLabel(target.dataset.id);
+              e.stopPropagation();
+              addNewOptionFromPicker();
             } else if (e.key === "Escape") {
               e.preventDefault();
-              state.editingLabelTaskId = null;
-              state.labelDraft = "";
-              render();
-            }
-          } else if (target.dataset.role === "category-input") {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              commitCategory(target.dataset.id);
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              state.editingCategoryTaskId = null;
-              state.categoryDraft = "";
+              e.stopPropagation();
+              state.openCardPicker = null;
+              state.openModalPickerType = null;
+              state.pickerNewDraft = "";
               render();
             }
           } else if (target.dataset.role === "label-item-input") {
@@ -3436,9 +3818,6 @@
             const observacoes = document.getElementById("modal-observacoes").value.trim() || undefined;
             const isCompleted = status === "Concluído";
 
-            addTagToContext("modal-rotulo", state.modalRotuloDraft, false);
-            addTagToContext("modal-categoria", state.modalCategoriaDraft, false);
-
             const rotulosFinal = normalizeTagList(state.modalRotulos, "Geral");
             const categoriasFinal = normalizeTagList(state.modalCategorias, "Outro");
             const rotuloJoined = rotulosFinal.join(", ");
@@ -3483,10 +3862,10 @@
               state.tasks = state.tasks.map((t) => (t.id === updated.id ? updated : t));
             }
             state.modalTask = null;
+            state.openModalPickerType = null;
+            state.pickerNewDraft = "";
             state.modalRotulos = [];
             state.modalCategorias = [];
-            state.modalRotuloDraft = "";
-            state.modalCategoriaDraft = "";
             if (isCreateMode) {
               void persistNewDemand(updated);
             } else {
@@ -3535,10 +3914,36 @@
           }
         });
 
-        window.addEventListener("keydown", (e) => {
-          if (e.key === "Escape" && state.modalTask) {
-            state.modalTask = null;
+        document.addEventListener("mousedown", (e) => {
+          if (!state.openCardPicker && !state.openModalPickerType) return;
+          if (!e.target.closest("[data-picker-root]")) {
+            state.openCardPicker = null;
+            state.openModalPickerType = null;
+            state.pickerNewDraft = "";
             render();
+          }
+        });
+
+        window.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") {
+            if (state.confirmDeleteTask) {
+              e.preventDefault();
+              state.confirmDeleteTask = null;
+              render();
+              return;
+            }
+            if (state.openCardPicker || state.openModalPickerType) {
+              e.preventDefault();
+              state.openCardPicker = null;
+              state.openModalPickerType = null;
+              state.pickerNewDraft = "";
+              render();
+              return;
+            }
+            if (state.modalTask) {
+              state.modalTask = null;
+              render();
+            }
           }
         });
 
