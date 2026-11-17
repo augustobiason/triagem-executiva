@@ -53,8 +53,12 @@
         const DEFAULT_CATEGORIES = [
           "Redação",
           "Revisão",
+          "Eventos e Roteiros",
           "Reunião",
           "Administrativo",
+          "Jurídico",
+          "Financeiro",
+          "Operações",
           "Outro",
         ];
 
@@ -117,15 +121,86 @@
         ];
 
         const STORAGE_CATEGORIES_KEY = "triagem_executiva_categories_v1";
+        const STORAGE_LABELS_KEY = "triagem_executiva_labels_v1";
+        const STORAGE_LABEL_COLORS_KEY = "triagem_executiva_label_colors_v1";
+
+        const LABEL_COLOR_PALETTE = [
+          { name: "Azul", hex: "#2563eb" },
+          { name: "Verde", hex: "#16a34a" },
+          { name: "Âmbar", hex: "#d97706" },
+          { name: "Roxo", hex: "#7c3aed" },
+          { name: "Rosa", hex: "#db2777" },
+          { name: "Índigo", hex: "#4f46e5" },
+          { name: "Ciano", hex: "#0891b2" },
+          { name: "Coral", hex: "#dc2626" },
+          { name: "Esmeralda", hex: "#0d9488" },
+          { name: "Cinza", hex: "#475569" },
+        ];
+
+        const SORT_OPTIONS = [
+          { value: "prazo_asc", label: "Prazo mais próximo" },
+          { value: "recebido_desc", label: "Recebidos mais recentes" },
+          { value: "recebido_asc", label: "Recebidos mais antigos" },
+          { value: "urgencia_desc", label: "Maior urgência" },
+        ];
+
+        function parseMultiValueField(rawValue, fallback) {
+          let parts = [];
+          if (Array.isArray(rawValue)) {
+            parts = rawValue.map((item) => String(item ?? "").trim());
+          } else if (rawValue !== null && rawValue !== undefined) {
+            parts = String(rawValue)
+              .split(",")
+              .map((item) => item.trim());
+          }
+          const seen = new Set();
+          const result = [];
+          for (const part of parts) {
+            if (!part) continue;
+            const key = part.toLowerCase();
+            if (!seen.has(key)) {
+              seen.add(key);
+              result.push(part);
+            }
+          }
+          if (result.length === 0 && fallback) {
+            return [fallback];
+          }
+          return result;
+        }
+
+        function normalizeTagList(items, fallback) {
+          const seen = new Set();
+          const result = [];
+          for (const item of items || []) {
+            const cleaned = String(item ?? "").trim();
+            if (!cleaned) continue;
+            const key = cleaned.toLowerCase();
+            if (!seen.has(key)) {
+              seen.add(key);
+              result.push(cleaned);
+            }
+          }
+          if (result.length === 0 && fallback) {
+            return [fallback];
+          }
+          return result;
+        }
 
         function loadStoredCategories() {
           try {
             const raw = localStorage.getItem(STORAGE_CATEGORIES_KEY);
             if (!raw) return [...DEFAULT_CATEGORIES];
             const parsed = JSON.parse(raw);
-            return Array.isArray(parsed) && parsed.length > 0
-              ? parsed.map((c) => String(c))
-              : [...DEFAULT_CATEGORIES];
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const set = new Set(DEFAULT_CATEGORIES);
+              for (const c of parsed) {
+                const cleaned = String(c ?? "").trim();
+                if (cleaned) set.add(cleaned);
+              }
+              return Array.from(set);
+            }
+            return [...DEFAULT_CATEGORIES];
           } catch {
             return [...DEFAULT_CATEGORIES];
           }
@@ -137,6 +212,116 @@
           } catch {
             // Ignore storage errors
           }
+        }
+
+        function loadStoredLabels() {
+          try {
+            const raw = localStorage.getItem(STORAGE_LABELS_KEY);
+            if (!raw) return ["Geral"];
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const set = new Set(["Geral"]);
+              for (const lbl of parsed) {
+                const cleaned = String(lbl ?? "").trim();
+                if (cleaned) set.add(cleaned);
+              }
+              const others = Array.from(set)
+                .filter((lbl) => lbl !== "Geral")
+                .sort((a, b) => a.localeCompare(b, "pt-BR"));
+              return ["Geral", ...others];
+            }
+            return ["Geral"];
+          } catch {
+            return ["Geral"];
+          }
+        }
+
+        function saveStoredLabels(lbls) {
+          try {
+            localStorage.setItem(STORAGE_LABELS_KEY, JSON.stringify(lbls));
+          } catch {
+            // Ignore storage errors
+          }
+        }
+
+        function loadStoredLabelColors() {
+          try {
+            const raw = localStorage.getItem(STORAGE_LABEL_COLORS_KEY);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              return {};
+            }
+            const cleaned = {};
+            for (const [key, val] of Object.entries(parsed)) {
+              const name = String(key ?? "").trim();
+              const hex = String(val ?? "").trim();
+              if (name && /^#[0-9a-f]{6}$/i.test(hex)) {
+                cleaned[name] = hex.toLowerCase();
+              }
+            }
+            return cleaned;
+          } catch {
+            return {};
+          }
+        }
+
+        function saveStoredLabelColors(colors) {
+          try {
+            localStorage.setItem(STORAGE_LABEL_COLORS_KEY, JSON.stringify(colors));
+          } catch {
+            // Ignore storage errors
+          }
+        }
+
+        function parseHexRgb(hex) {
+          const clean = String(hex ?? "").trim().replace(/^#/, "");
+          if (!/^[0-9a-f]{6}$/i.test(clean)) return null;
+          return {
+            r: parseInt(clean.slice(0, 2), 16),
+            g: parseInt(clean.slice(2, 4), 16),
+            b: parseInt(clean.slice(4, 6), 16),
+          };
+        }
+
+        function findLabelColorHex(label, labelColors) {
+          const trimmed = String(label ?? "").trim();
+          if (!trimmed || !labelColors) return undefined;
+          if (labelColors[trimmed]) return labelColors[trimmed];
+          const lower = trimmed.toLowerCase();
+          for (const [k, v] of Object.entries(labelColors)) {
+            if (k.toLowerCase() === lower) return v;
+          }
+          return undefined;
+        }
+
+        function getLabelBadgeStyleAttr(label, labelColors) {
+          const hex = findLabelColorHex(label, labelColors);
+          const rgb = hex ? parseHexRgb(hex) : null;
+          if (!rgb) {
+            return "background-color: rgba(100, 116, 139, 0.09); border-color: rgba(100, 116, 139, 0.24); color: #334155;";
+          }
+          const { r, g, b } = rgb;
+          const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+          const factor = luminance > 0.52 ? 0.44 : luminance > 0.38 ? 0.68 : 0.82;
+          const textR = Math.round(r * factor);
+          const textG = Math.round(g * factor);
+          const textB = Math.round(b * factor);
+          return `background-color: rgba(${r}, ${g}, ${b}, 0.12); border-color: rgba(${r}, ${g}, ${b}, 0.30); color: rgb(${textR}, ${textG}, ${textB});`;
+        }
+
+        function getTaskLabels(task) {
+          if (!task) return ["Geral"];
+          return Array.isArray(task.rotulos) && task.rotulos.length > 0
+            ? normalizeTagList(task.rotulos, "Geral")
+            : parseMultiValueField(task.rotulo_aplicado, "Geral");
+        }
+
+        function getTaskCategories(task) {
+          if (!task) return ["Outro"];
+          return Array.isArray(task.categorias) && task.categorias.length > 0
+            ? normalizeTagList(task.categorias, "Outro")
+            : parseMultiValueField(task.categoria, "Outro");
         }
 
         function uuid() {
@@ -358,6 +543,12 @@
           const assuntoLimpo =
             normalizeEmailSubject(String(r.assunto_original ?? r.assunto ?? "")) || "Sem assunto";
 
+          const rotulos = parseMultiValueField(
+            r.rotulos ?? r.rotulo_aplicado ?? r.rotulo,
+            "Geral"
+          );
+          const categorias = parseMultiValueField(r.categorias ?? r.categoria, "Outro");
+
           const historico_mensagens = parseThreadHistory(
             r.historico_mensagens,
             solicitanteNome,
@@ -377,13 +568,15 @@
               ? String(r.prazo_texto_original).trim()
               : null,
             urgencia: normalizeUrgency(r.urgencia),
-            categoria: String(r.categoria ?? "Outro").trim() || "Outro",
+            categoria: categorias.join(", "),
+            categorias,
             assunto_original: assuntoLimpo,
             solicitante_nome: solicitanteNome,
             solicitante_email: solicitanteEmail,
             data_email_original: dataOriginal || dataHoraOriginal.slice(0, 10),
             data_hora_email_original: dataHoraOriginal,
-            rotulo_aplicado: String(r.rotulo_aplicado ?? r.rotulo ?? "Geral").trim() || "Geral",
+            rotulo_aplicado: rotulos.join(", "),
+            rotulos,
             regra_acionada: Boolean(r.regra_acionada ?? false),
             status,
             statusNote: String(r.statusNote ?? r.observacao_status ?? "").trim() || undefined,
@@ -405,13 +598,15 @@
 
         function normalizeRule(raw, index) {
           const r = raw || {};
+          const rotuloList = parseMultiValueField(r.rotulos ?? r.rotulo, "Geral");
+          const categoriaList = parseMultiValueField(r.categorias ?? r.categoria, "Outro");
           return {
             id: String(r.id ?? `rule-${index}-${uuid()}`),
             ativo: r.ativo !== false && r.ativa !== false && r.ativo !== "false",
             matchType: normalizeMatchType(r.matchType ?? r.criterio),
             matchValue: String(r.matchValue ?? r.valor ?? "").trim(),
-            rotulo: String(r.rotulo ?? "Geral").trim(),
-            categoria: String(r.categoria ?? "Outro").trim() || "Outro",
+            rotulo: rotuloList.join(", "),
+            categoria: categoriaList.join(", "),
           };
         }
 
@@ -459,13 +654,81 @@
           return extractPayload(await res.json());
         }
 
-        async function postUpdateDemandToGas(demanda) {
-          const rotuloFinal = (demanda.rotulo_aplicado || "Geral").trim() || "Geral";
-          const payloadDemanda = {
+        function buildDemandPayloadObject(demanda) {
+          const rotulosFinal = normalizeTagList(
+            Array.isArray(demanda.rotulos)
+              ? demanda.rotulos
+              : parseMultiValueField(demanda.rotulo_aplicado, "Geral"),
+            "Geral"
+          );
+          const categoriasFinal = normalizeTagList(
+            Array.isArray(demanda.categorias)
+              ? demanda.categorias
+              : parseMultiValueField(demanda.categoria, "Outro"),
+            "Outro"
+          );
+          const rotuloJoined = rotulosFinal.join(", ");
+          const categoriaJoined = categoriasFinal.join(", ");
+
+          return {
             ...demanda,
-            rotulo_aplicado: rotuloFinal,
-            rotulo: rotuloFinal,
+            rotulos: rotulosFinal,
+            categorias: categoriasFinal,
+            rotulo_aplicado: rotuloJoined,
+            rotulo: rotuloJoined,
+            categoria: categoriaJoined,
           };
+        }
+
+        async function postCreateDemandToGas(demanda) {
+          const objetoDaNovaDemanda = buildDemandPayloadObject(demanda);
+
+          const res = await fetch(API_URL, {
+            method: "POST",
+            redirect: "follow",
+            headers: {
+              "Content-Type": "text/plain;charset=utf-8",
+            },
+            body: JSON.stringify({
+              acao: "criar_demanda",
+              demanda: objetoDaNovaDemanda,
+            }),
+          });
+          if (!res.ok) {
+            throw new Error(`Erro HTTP ${res.status} ao criar demanda na planilha.`);
+          }
+          const text = await res.text();
+          if (!text.trim().startsWith("{")) {
+            return null;
+          }
+          const parsed = JSON.parse(text);
+          const container =
+            parsed.data && typeof parsed.data === "object" ? parsed.data : parsed;
+          if (container.erro || container.error) {
+            throw new Error(String(container.erro ?? container.error));
+          }
+          const hasDemandas = Array.isArray(container.demandas);
+          const hasRegras = Array.isArray(container.regras);
+          if (!hasDemandas && !hasRegras) {
+            return null;
+          }
+          return {
+            demandas: hasDemandas
+              ? container.demandas.map((item, idx) => normalizeTask(item, idx))
+              : null,
+            regras: hasRegras
+              ? container.regras
+                  .map((item, idx) => normalizeRule(item, idx))
+                  .filter((r) => r.matchValue.length > 0 && r.rotulo.length > 0)
+              : null,
+            categorias: Array.isArray(container.categorias)
+              ? container.categorias.map((c) => String(c ?? "").trim()).filter(Boolean)
+              : [],
+          };
+        }
+
+        async function postUpdateDemandToGas(demanda) {
+          const payloadDemanda = buildDemandPayloadObject(demanda);
 
           const res = await fetch(API_URL, {
             method: "POST",
@@ -514,12 +777,17 @@
           }
         }
 
+        const initialCategories = loadStoredCategories();
+
         const state = {
           view: "tasks",
           mobileMenuOpen: false,
           tasks: [],
           rules: [],
-          categories: loadStoredCategories(),
+          categories: initialCategories,
+          labels: loadStoredLabels(),
+          labelColors: loadStoredLabelColors(),
+          colorPickerLabel: null,
           isInitialLoading: true,
           isSyncing: false,
           isSaving: false,
@@ -529,29 +797,92 @@
           statusFilter: "Todos",
           urgencyFilter: "Todas",
           labelFilter: "Todos",
+          categoryFilter: "Todas",
+          sortBy: "prazo_asc",
           editingObsTaskId: null,
           obsDraft: "",
           editingLabelTaskId: null,
           labelDraft: "",
+          editingCategoryTaskId: null,
+          categoryDraft: "",
           expandedThreads: {},
           modalTask: null,
           modalMode: "edit",
           modalShowHistory: false,
+          modalRotulos: [],
+          modalCategorias: [],
+          modalRotuloDraft: "",
+          modalCategoriaDraft: "",
           editingRuleId: null,
           editRuleDraft: null,
+          editRuleRotuloDraft: "",
+          editRuleCategoriaDraft: "",
           ruleFormMatchType: "dominio",
           ruleFormMatchValue: "",
-          ruleFormRotulo: "",
-          ruleFormCategoria: "Outro",
+          ruleFormRotulos: [],
+          ruleFormCategorias: [initialCategories[0] || "Outro"],
+          ruleFormRotuloDraft: "",
+          ruleFormCategoriaDraft: "",
+          newLabelInput: "",
+          editingLabelItem: null,
+          labelItemDraft: "",
           newCategoryInput: "",
+          pendingFocusTagContext: null,
         };
 
         function mergeCategoryLists(base, incoming, rules, tasks) {
           const set = new Set(base);
-          for (const c of incoming) if (c.trim()) set.add(c.trim());
-          for (const r of rules) if (r.categoria && r.categoria.trim()) set.add(r.categoria.trim());
-          for (const t of tasks) if (t.categoria && t.categoria.trim()) set.add(t.categoria.trim());
+          for (const c of incoming) {
+            for (const part of parseMultiValueField(c, "")) set.add(part);
+          }
+          for (const r of rules) {
+            for (const part of parseMultiValueField(r.categoria, "")) set.add(part);
+          }
+          for (const t of tasks) {
+            for (const part of getTaskCategories(t)) set.add(part);
+          }
           return Array.from(set);
+        }
+
+        function mergeLabelLists(base, rules, tasks) {
+          const set = new Set(["Geral"]);
+          for (const lbl of base) {
+            for (const part of parseMultiValueField(lbl, "")) set.add(part);
+          }
+          for (const r of rules) {
+            for (const part of parseMultiValueField(r.rotulo, "")) set.add(part);
+          }
+          for (const t of tasks) {
+            for (const part of getTaskLabels(t)) set.add(part);
+          }
+          const others = Array.from(set)
+            .filter((lbl) => lbl !== "Geral")
+            .sort((a, b) => a.localeCompare(b, "pt-BR"));
+          return ["Geral", ...others];
+        }
+
+        function ensureLabelsTracked(rawLabels) {
+          const cleaned = normalizeTagList(rawLabels);
+          if (cleaned.length === 0) return;
+          const missing = cleaned.filter(
+            (item) => !state.labels.some((lbl) => lbl.toLowerCase() === item.toLowerCase())
+          );
+          if (missing.length > 0) {
+            state.labels = mergeLabelLists([...state.labels, ...missing], [], []);
+            saveStoredLabels(state.labels);
+          }
+        }
+
+        function ensureCategoriesTracked(rawCategories) {
+          const cleaned = normalizeTagList(rawCategories);
+          if (cleaned.length === 0) return;
+          const missing = cleaned.filter(
+            (item) => !state.categories.some((c) => c.toLowerCase() === item.toLowerCase())
+          );
+          if (missing.length > 0) {
+            state.categories = [...state.categories, ...missing];
+            saveStoredCategories(state.categories);
+          }
         }
 
         function applyGasPayload(payload) {
@@ -564,19 +895,33 @@
             payload.demandas
           );
           saveStoredCategories(state.categories);
-          if (!state.categories.includes(state.ruleFormCategoria)) {
-            state.ruleFormCategoria = state.categories[0] || "Outro";
+          state.labels = mergeLabelLists(
+            state.labels.length > 0 ? state.labels : ["Geral"],
+            payload.regras,
+            payload.demandas
+          );
+          saveStoredLabels(state.labels);
+          if (state.ruleFormCategorias.length === 0) {
+            state.ruleFormCategorias = [state.categories[0] || "Outro"];
           }
         }
 
         function getAvailableLabels() {
-          const set = new Set(["Geral"]);
-          for (const r of state.rules) if (r.rotulo.trim()) set.add(r.rotulo.trim());
-          for (const t of state.tasks) if (t.rotulo_aplicado && t.rotulo_aplicado.trim()) set.add(t.rotulo_aplicado.trim());
-          const others = Array.from(set)
-            .filter((lbl) => lbl !== "Geral")
-            .sort((a, b) => a.localeCompare(b, "pt-BR"));
-          return ["Geral", ...others];
+          return mergeLabelLists(state.labels, state.rules, state.tasks);
+        }
+
+        function getAvailableCategories() {
+          const set = new Set(DEFAULT_CATEGORIES);
+          for (const c of state.categories) {
+            for (const part of parseMultiValueField(c, "")) set.add(part);
+          }
+          for (const r of state.rules) {
+            for (const part of parseMultiValueField(r.categoria, "")) set.add(part);
+          }
+          for (const t of state.tasks) {
+            for (const part of getTaskCategories(t)) set.add(part);
+          }
+          return Array.from(set);
         }
 
         function getActiveLabelFilter(availableLabels) {
@@ -585,16 +930,35 @@
             : "Todos";
         }
 
+        function getActiveCategoryFilter(availableCategories) {
+          return state.categoryFilter === "Todas" || availableCategories.includes(state.categoryFilter)
+            ? state.categoryFilter
+            : "Todas";
+        }
+
+        function getUrgencyWeight(u) {
+          if (u === "Alta") return 3;
+          if (u === "Média") return 2;
+          return 1;
+        }
+
         function getFilteredTasks() {
           const q = state.search.trim().toLowerCase();
           const availableLabels = getAvailableLabels();
+          const availableCategories = getAvailableCategories();
           const activeLabelFilter = getActiveLabelFilter(availableLabels);
-          return state.tasks.filter((task) => {
+          const activeCategoryFilter = getActiveCategoryFilter(availableCategories);
+
+          const list = state.tasks.filter((task) => {
             const currentStatus = task.status ?? (task.completed ? "Concluído" : "A Fazer");
-            const taskLabel = (task.rotulo_aplicado || "").trim() || "Geral";
+            const taskLabels = getTaskLabels(task);
+            const taskCategories = getTaskCategories(task);
             if (state.statusFilter !== "Todos" && currentStatus !== state.statusFilter) return false;
             if (state.urgencyFilter !== "Todas" && task.urgencia !== state.urgencyFilter) return false;
-            if (activeLabelFilter !== "Todos" && taskLabel !== activeLabelFilter) return false;
+            if (activeLabelFilter !== "Todos" && !taskLabels.includes(activeLabelFilter)) return false;
+            if (activeCategoryFilter !== "Todas" && !taskCategories.includes(activeCategoryFilter)) {
+              return false;
+            }
             if (q) {
               const historyText = (task.historico_mensagens || [])
                 .map((m) => `${m.remetente_nome} ${m.resumo}`)
@@ -605,8 +969,8 @@
                 task.assunto_original,
                 task.solicitante_nome,
                 task.solicitante_email,
-                task.categoria,
-                taskLabel,
+                taskCategories.join(" "),
+                taskLabels.join(" "),
                 task.statusNote || "",
                 task.observacoes || "",
                 historyText,
@@ -617,6 +981,102 @@
             }
             return true;
           });
+
+          const prazoKey = (t) => (t.prazo && t.prazo.trim() ? t.prazo.trim() : "9999-12-31");
+          const receivedKey = (t) => t.data_hora_email_original || t.data_email_original || "";
+
+          return [...list].sort((a, b) => {
+            if (state.sortBy === "prazo_asc") {
+              const cmp = prazoKey(a).localeCompare(prazoKey(b));
+              if (cmp !== 0) return cmp;
+              return receivedKey(b).localeCompare(receivedKey(a));
+            }
+            if (state.sortBy === "recebido_desc") {
+              return receivedKey(b).localeCompare(receivedKey(a));
+            }
+            if (state.sortBy === "recebido_asc") {
+              return receivedKey(a).localeCompare(receivedKey(b));
+            }
+            const urgDiff = getUrgencyWeight(b.urgencia) - getUrgencyWeight(a.urgencia);
+            if (urgDiff !== 0) return urgDiff;
+            return prazoKey(a).localeCompare(prazoKey(b));
+          });
+        }
+
+        function renderMultiTagInput({
+          context,
+          tags,
+          draft,
+          datalistId,
+          placeholder,
+          fallbackDisplay,
+          useLabelColors,
+          compact,
+          inputId,
+          ariaLabel,
+        }) {
+          const list = Array.isArray(tags) ? tags : [];
+          const chipsHtml =
+            list.length > 0
+              ? list
+                  .map((tag) => {
+                    const styleAttr = useLabelColors
+                      ? `style="${getLabelBadgeStyleAttr(tag, state.labelColors)}"`
+                      : "";
+                    const baseCls = useLabelColors
+                      ? "border font-medium"
+                      : "bg-slate-100 text-slate-700 border border-slate-200 font-medium";
+                    const sizeCls = compact
+                      ? "px-1.5 py-0.5 text-[11px]"
+                      : "px-2 py-0.5 text-xs";
+                    return `
+                      <span ${styleAttr} class="inline-flex items-center gap-1 rounded-md ${baseCls} ${sizeCls}">
+                        <span>${escapeHtml(tag)}</span>
+                        <button type="button" data-action="remove-tag-item" data-context="${escapeHtml(
+                          context
+                        )}" data-value="${escapeHtml(tag)}" aria-label="Remover ${escapeHtml(
+                      tag
+                    )}" class="opacity-70 hover:opacity-100 rounded transition-opacity cursor-pointer">
+                          <i data-lucide="x" class="w-3 h-3"></i>
+                        </button>
+                      </span>
+                    `;
+                  })
+                  .join("")
+              : fallbackDisplay
+              ? `<span class="text-[11px] text-slate-400 italic px-1">Padrão: ${escapeHtml(
+                  fallbackDisplay
+                )}</span>`
+              : "";
+
+          const inputSizeCls = compact ? "px-2 py-1 text-xs" : "px-2.5 py-1.5 text-sm";
+          const btnSizeCls = compact ? "px-2 py-1 text-[11px]" : "px-2.5 py-1.5 text-xs";
+
+          return `
+            <div class="border border-slate-200 rounded-lg bg-white p-1.5 space-y-1.5 focus-within:ring-2 focus-within:ring-blue-600/20 focus-within:border-blue-600">
+              <div class="flex flex-wrap items-center gap-1.5">${chipsHtml}</div>
+              <div class="flex items-center gap-1.5">
+                <input
+                  ${inputId ? `id="${escapeHtml(inputId)}"` : ""}
+                  type="text"
+                  list="${escapeHtml(datalistId)}"
+                  data-role="tag-input"
+                  data-context="${escapeHtml(context)}"
+                  value="${escapeHtml(draft || "")}"
+                  placeholder="${escapeHtml(placeholder || "")}"
+                  aria-label="${escapeHtml(ariaLabel || placeholder || "")}"
+                  class="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-md focus:outline-none focus:bg-white focus:border-blue-500 ${inputSizeCls} text-slate-900"
+                />
+                <button type="button" data-action="add-tag-item" data-context="${escapeHtml(
+                  context
+                )}"
+                  class="inline-flex items-center gap-1 font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${btnSizeCls}">
+                  <i data-lucide="plus" class="w-3 h-3"></i>
+                  <span>Incluir</span>
+                </button>
+              </div>
+            </div>
+          `;
         }
 
         function renderStatusBadge(status) {
@@ -696,7 +1156,7 @@
                     }">
                     <span class="inline-flex items-center gap-2.5">
                       <i data-lucide="sliders-horizontal" class="w-4 h-4 shrink-0"></i>
-                      <span>Regras &amp; Categorias</span>
+                      <span>Regras e Configurações</span>
                     </span>
                     <span class="font-mono tabular-nums text-xs text-slate-500">${activeRulesCount}</span>
                   </button>
@@ -788,7 +1248,9 @@
           }
 
           const availableLabels = getAvailableLabels();
+          const availableCategories = getAvailableCategories();
           const activeLabelFilter = getActiveLabelFilter(availableLabels);
+          const activeCategoryFilter = getActiveCategoryFilter(availableCategories);
           const filtered = getFilteredTasks();
 
           const statusTabsHtml = STATUS_FILTER_OPTIONS.map((st) => {
@@ -833,6 +1295,7 @@
                   const isCompleted = currentStatus === "Concluído";
                   const isEditingObs = state.editingObsTaskId === task.id;
                   const isEditingLabel = state.editingLabelTaskId === task.id;
+                  const isEditingCategory = state.editingCategoryTaskId === task.id;
                   const historyList = task.historico_mensagens || [];
                   const isExpanded = Boolean(state.expandedThreads[task.id]);
 
@@ -971,6 +1434,20 @@
                       }>${escapeHtml(opt)}</option>`
                   ).join("");
 
+                  const taskLabels = getTaskLabels(task);
+                  const taskCategories = getTaskCategories(task);
+                  const labelBadgesHtml = taskLabels
+                    .map(
+                      (lbl) => `
+                        <span style="${getLabelBadgeStyleAttr(lbl, state.labelColors)}"
+                          class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium border rounded-md whitespace-nowrap shrink-0">
+                          <i data-lucide="tag" class="w-3 h-3 opacity-80"></i>
+                          <span>${escapeHtml(lbl)}</span>
+                        </span>
+                      `
+                    )
+                    .join("");
+
                   return `
                     <article class="p-5 sm:px-6 transition-colors hover:bg-slate-50/60 ${
                       task.hasNewMessage ? "bg-blue-50/35" : isCompleted ? "bg-slate-50/40" : ""
@@ -978,7 +1455,7 @@
                       ${newMessageBanner}
                       <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
                         <div class="min-w-0 flex-1 space-y-2.5">
-                          <div class="flex flex-wrap items-center gap-2.5">
+                          <div class="flex flex-wrap items-center gap-2">
                             ${renderStatusBadge(currentStatus)}
                             ${renderUrgencyIndicator(task.urgencia)}
                             <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
@@ -987,30 +1464,55 @@
                                 ? `<span class="inline-flex items-center gap-1">
                                     <input type="text" list="queue-rotulo-options"
                                       data-role="label-input" data-id="${escapeHtml(task.id)}"
-                                      aria-label="Editar rótulo da demanda"
+                                      aria-label="Editar rótulos da demanda"
                                       value="${escapeHtml(state.labelDraft)}"
-                                      placeholder="Digite ou escolha..."
-                                      class="w-36 px-2 py-0.5 text-xs font-medium text-slate-900 bg-white border border-blue-400 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
+                                      placeholder="Separe por vírgula..."
+                                      class="w-48 px-2 py-0.5 text-xs font-medium text-slate-900 bg-white border border-blue-400 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
                                     <button type="button" data-action="save-label" data-id="${escapeHtml(task.id)}"
-                                      aria-label="Salvar rótulo"
+                                      aria-label="Salvar rótulos"
                                       class="p-0.5 text-emerald-700 hover:bg-emerald-50 rounded cursor-pointer">
                                       <i data-lucide="check" class="w-3.5 h-3.5"></i>
                                     </button>
                                     <button type="button" data-action="cancel-label" data-label-action="cancel"
-                                      aria-label="Cancelar edição do rótulo"
+                                      aria-label="Cancelar edição dos rótulos"
                                       class="p-0.5 text-slate-500 hover:bg-slate-100 rounded cursor-pointer">
                                       <i data-lucide="x" class="w-3.5 h-3.5"></i>
                                     </button>
                                   </span>`
                                 : `<button type="button" data-action="edit-label" data-id="${escapeHtml(task.id)}"
-                                    title="Clique para editar o rótulo"
-                                    class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-slate-800 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 border border-slate-200 hover:border-blue-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                                    <i data-lucide="tag" class="w-3 h-3 text-slate-500"></i>
-                                    <span>${escapeHtml(task.rotulo_aplicado || "Geral")}</span>
+                                    title="Clique para editar os rótulos (separe múltiplos por vírgula)"
+                                    class="inline-flex flex-wrap items-center gap-1.5 rounded-md hover:ring-2 hover:ring-blue-500/30 transition-all cursor-pointer">
+                                    ${labelBadgesHtml}
                                   </button>`
                             }
                             <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
-                            <span class="text-xs text-slate-600">${escapeHtml(task.categoria)}</span>
+                            ${
+                              isEditingCategory
+                                ? `<span class="inline-flex items-center gap-1">
+                                    <input type="text" list="queue-categoria-options"
+                                      data-role="category-input" data-id="${escapeHtml(task.id)}"
+                                      aria-label="Editar categorias da demanda"
+                                      value="${escapeHtml(state.categoryDraft)}"
+                                      placeholder="Separe por vírgula..."
+                                      class="w-48 px-2 py-0.5 text-xs font-medium text-slate-900 bg-white border border-blue-400 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
+                                    <button type="button" data-action="save-category" data-id="${escapeHtml(task.id)}"
+                                      aria-label="Salvar categorias"
+                                      class="p-0.5 text-emerald-700 hover:bg-emerald-50 rounded cursor-pointer">
+                                      <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                    <button type="button" data-action="cancel-category" data-category-action="cancel"
+                                      aria-label="Cancelar edição das categorias"
+                                      class="p-0.5 text-slate-500 hover:bg-slate-100 rounded cursor-pointer">
+                                      <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                  </span>`
+                                : `<button type="button" data-action="edit-category" data-id="${escapeHtml(task.id)}"
+                                    title="Clique para editar as categorias (separe múltiplas por vírgula)"
+                                    class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-slate-700 bg-white hover:bg-blue-50 hover:text-blue-700 border border-slate-200 hover:border-blue-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                                    <i data-lucide="folder" class="w-3 h-3 text-slate-400"></i>
+                                    <span>${escapeHtml(taskCategories.join(" / "))}</span>
+                                  </button>`
+                            }
                             <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
                             <span title="${escapeHtml(task.prazo || "")}"
                               class="inline-flex items-center gap-1 font-mono tabular-nums text-xs text-slate-700">
@@ -1130,6 +1632,35 @@
                           .join("")}
                       </select>
                     </div>
+                    <div class="relative flex items-center">
+                      <i data-lucide="folder" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none"></i>
+                      <label for="filter-categoria-select" class="sr-only">Filtrar por categoria</label>
+                      <select id="filter-categoria-select" data-role="category-filter"
+                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-white focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 cursor-pointer">
+                        <option value="Todas" ${activeCategoryFilter === "Todas" ? "selected" : ""}>Todas as categorias</option>
+                        ${availableCategories
+                          .map(
+                            (cat) =>
+                              `<option value="${escapeHtml(cat)}" ${
+                                activeCategoryFilter === cat ? "selected" : ""
+                              }>${escapeHtml(cat)}</option>`
+                          )
+                          .join("")}
+                      </select>
+                    </div>
+                    <div class="relative flex items-center">
+                      <i data-lucide="arrow-up-down" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none"></i>
+                      <label for="queue-sort-select" class="sr-only">Ordenar fila de demandas</label>
+                      <select id="queue-sort-select" data-role="queue-sort"
+                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-white focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 cursor-pointer">
+                        ${SORT_OPTIONS.map(
+                          (opt) =>
+                            `<option value="${opt.value}" ${
+                              state.sortBy === opt.value ? "selected" : ""
+                            }>Ordenar: ${escapeHtml(opt.label)}</option>`
+                        ).join("")}
+                      </select>
+                    </div>
                   </div>
                   <div class="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
                     ${urgencyTabsHtml}
@@ -1139,12 +1670,18 @@
               <datalist id="queue-rotulo-options">
                 ${availableLabels.map((lbl) => `<option value="${escapeHtml(lbl)}"></option>`).join("")}
               </datalist>
+              <datalist id="queue-categoria-options">
+                ${availableCategories.map((cat) => `<option value="${escapeHtml(cat)}"></option>`).join("")}
+              </datalist>
               ${listHtml}
             </section>
           `;
         }
 
         function renderRulesView() {
+          const availableLabels = getAvailableLabels();
+          const availableCategories = getAvailableCategories();
+
           const matchOptions = Object.keys(MATCH_TYPE_LABELS)
             .map(
               (k) =>
@@ -1154,14 +1691,14 @@
             )
             .join("");
 
-          const catOptions = state.categories
-            .map(
-              (c) =>
-                `<option value="${escapeHtml(c)}" ${
-                  state.ruleFormCategoria === c ? "selected" : ""
-                }>${escapeHtml(c)}</option>`
-            )
-            .join("");
+          const datalistsHtml = `
+            <datalist id="rules-rotulo-options">
+              ${availableLabels.map((lbl) => `<option value="${escapeHtml(lbl)}"></option>`).join("")}
+            </datalist>
+            <datalist id="rules-categoria-options">
+              ${availableCategories.map((cat) => `<option value="${escapeHtml(cat)}"></option>`).join("")}
+            </datalist>
+          `;
 
           const rulesBody =
             state.rules.length === 0
@@ -1175,8 +1712,8 @@
                         <th class="py-2.5 pl-6 pr-3">Estado</th>
                         <th class="py-2.5 px-3">Critério</th>
                         <th class="py-2.5 px-3">Correspondência</th>
-                        <th class="py-2.5 px-3">Rótulo aplicado</th>
-                        <th class="py-2.5 px-3">Categoria</th>
+                        <th class="py-2.5 px-3">Rótulos aplicados</th>
+                        <th class="py-2.5 px-3">Categorias</th>
                         <th class="py-2.5 pl-3 pr-6 text-right">Ações</th>
                       </tr>
                     </thead>
@@ -1186,7 +1723,7 @@
                           if (state.editingRuleId === rule.id && state.editRuleDraft) {
                             const d = state.editRuleDraft;
                             return `
-                              <tr class="bg-blue-50/40">
+                              <tr class="bg-blue-50/40 align-top">
                                 <td class="py-2.5 pl-6 pr-3 text-xs text-slate-600 whitespace-nowrap">${
                                   d.ativo ? "Ativa" : "Pausada"
                                 }</td>
@@ -1205,24 +1742,32 @@
                                 <td class="py-2.5 px-3">
                                   <input type="text" data-role="edit-rule-matchValue" value="${escapeHtml(
                                     d.matchValue
-                                  )}" class="w-full px-2 py-1 font-mono text-xs bg-white border border-slate-300 rounded-md" />
+                                  )}" class="w-full min-w-[140px] px-2 py-1 font-mono text-xs bg-white border border-slate-300 rounded-md" />
                                 </td>
-                                <td class="py-2.5 px-3">
-                                  <input type="text" data-role="edit-rule-rotulo" value="${escapeHtml(
-                                    d.rotulo
-                                  )}" class="w-full px-2 py-1 text-xs bg-white border border-slate-300 rounded-md" />
+                                <td class="py-2.5 px-3 min-w-[200px]">
+                                  ${renderMultiTagInput({
+                                    context: "edit-rule-rotulo",
+                                    tags: d.rotulos,
+                                    draft: state.editRuleRotuloDraft,
+                                    datalistId: "rules-rotulo-options",
+                                    placeholder: "Adicionar rótulo...",
+                                    useLabelColors: true,
+                                    compact: true,
+                                    ariaLabel: "Editar rótulos da regra",
+                                  })}
                                 </td>
-                                <td class="py-2.5 px-3">
-                                  <select data-role="edit-rule-categoria" class="px-2 py-1 text-xs bg-white border border-slate-300 rounded-md">
-                                    ${state.categories
-                                      .map(
-                                        (c) =>
-                                          `<option value="${escapeHtml(c)}" ${
-                                            d.categoria === c ? "selected" : ""
-                                          }>${escapeHtml(c)}</option>`
-                                      )
-                                      .join("")}
-                                  </select>
+                                <td class="py-2.5 px-3 min-w-[200px]">
+                                  ${renderMultiTagInput({
+                                    context: "edit-rule-categoria",
+                                    tags: d.categorias,
+                                    draft: state.editRuleCategoriaDraft,
+                                    datalistId: "rules-categoria-options",
+                                    placeholder: "Adicionar categoria...",
+                                    fallbackDisplay: "Outro",
+                                    useLabelColors: false,
+                                    compact: true,
+                                    ariaLabel: "Editar categorias da regra",
+                                  })}
                                 </td>
                                 <td class="py-2.5 pl-3 pr-6 text-right whitespace-nowrap">
                                   <div class="inline-flex items-center gap-1">
@@ -1239,6 +1784,9 @@
                               </tr>
                             `;
                           }
+
+                          const ruleLabels = parseMultiValueField(rule.rotulo, "Geral");
+                          const ruleCategories = parseMultiValueField(rule.categoria, "Outro");
 
                           return `
                             <tr class="hover:bg-slate-50/80 transition-colors ${
@@ -1260,12 +1808,33 @@
                               <td class="py-3 px-3 font-mono text-xs text-slate-900">${escapeHtml(
                                 rule.matchValue
                               )}</td>
-                              <td class="py-3 px-3 text-xs font-semibold text-slate-900">${escapeHtml(
-                                rule.rotulo
-                              )}</td>
-                              <td class="py-3 px-3 text-xs text-slate-700 whitespace-nowrap">${escapeHtml(
-                                rule.categoria
-                              )}</td>
+                              <td class="py-3 px-3">
+                                <div class="flex flex-wrap items-center gap-1">
+                                  ${ruleLabels
+                                    .map(
+                                      (lbl) =>
+                                        `<span style="${getLabelBadgeStyleAttr(
+                                          lbl,
+                                          state.labelColors
+                                        )}" class="inline-flex items-center px-2 py-0.5 text-xs font-medium border rounded-md whitespace-nowrap">${escapeHtml(
+                                          lbl
+                                        )}</span>`
+                                    )
+                                    .join("")}
+                                </div>
+                              </td>
+                              <td class="py-3 px-3">
+                                <div class="flex flex-wrap items-center gap-1">
+                                  ${ruleCategories
+                                    .map(
+                                      (cat) =>
+                                        `<span class="inline-flex items-center px-2 py-0.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-md whitespace-nowrap">${escapeHtml(
+                                          cat
+                                        )}</span>`
+                                    )
+                                    .join("")}
+                                </div>
+                              </td>
                               <td class="py-3 pl-3 pr-6 text-right whitespace-nowrap">
                                 <div class="inline-flex items-center gap-1">
                                   <button type="button" data-action="edit-rule" data-id="${escapeHtml(
@@ -1292,8 +1861,149 @@
                   </table>
                 </div>`;
 
+          const labelsListHtml = availableLabels
+            .map((lbl) => {
+              const isDefault = lbl === "Geral";
+              const isEditingThis = state.editingLabelItem === lbl;
+              const isPickerOpen = state.colorPickerLabel === lbl;
+              const activeHex = findLabelColorHex(lbl, state.labelColors);
+
+              if (isEditingThis) {
+                return `
+                  <div class="px-5 py-2 flex items-center gap-2 bg-blue-50/40">
+                    <input
+                      type="text"
+                      data-role="label-item-input"
+                      data-label="${escapeHtml(lbl)}"
+                      value="${escapeHtml(state.labelItemDraft)}"
+                      aria-label="Novo nome para rótulo ${escapeHtml(lbl)}"
+                      class="flex-1 min-w-0 px-2.5 py-1 text-xs text-slate-900 bg-white border border-blue-400 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600/20"
+                    />
+                    <button
+                      type="button"
+                      data-action="save-label-item"
+                      data-label="${escapeHtml(lbl)}"
+                      aria-label="Salvar rótulo"
+                      class="p-1 text-emerald-700 hover:bg-emerald-50 rounded-md cursor-pointer shrink-0"
+                    >
+                      <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                    </button>
+                    <button
+                      type="button"
+                      data-action="cancel-label-item"
+                      data-label-item-action="cancel"
+                      aria-label="Cancelar edição do rótulo"
+                      class="p-1 text-slate-500 hover:bg-slate-100 rounded-md cursor-pointer shrink-0"
+                    >
+                      <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                    </button>
+                  </div>
+                `;
+              }
+
+              const pickerPanelHtml = isPickerOpen
+                ? `
+                  <div class="mt-2.5 p-2.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      ${LABEL_COLOR_PALETTE.map((preset) => {
+                        const isSelected = activeHex === preset.hex.toLowerCase();
+                        return `
+                          <button type="button"
+                            data-action="set-label-preset-color"
+                            data-label="${escapeHtml(lbl)}"
+                            data-hex="${preset.hex}"
+                            title="${escapeHtml(preset.name)}"
+                            aria-label="Aplicar cor ${escapeHtml(preset.name)} ao rótulo ${escapeHtml(lbl)}"
+                            style="background-color: ${preset.hex};"
+                            class="w-5 h-5 rounded-md border transition-transform hover:scale-110 cursor-pointer ${
+                              isSelected
+                                ? "ring-2 ring-offset-1 ring-slate-900 border-white"
+                                : "border-black/15"
+                            }"></button>
+                        `;
+                      }).join("")}
+                      <label title="Escolher cor personalizada"
+                        class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 rounded-md cursor-pointer hover:bg-slate-100">
+                        <input type="color"
+                          data-role="label-custom-color"
+                          data-label="${escapeHtml(lbl)}"
+                          value="${escapeHtml(activeHex || "#2563eb")}"
+                          aria-label="Cor personalizada para ${escapeHtml(lbl)}"
+                          class="w-4 h-4 p-0 border-0 bg-transparent cursor-pointer" />
+                        <span>Livre</span>
+                      </label>
+                      ${
+                        activeHex
+                          ? `<button type="button"
+                              data-action="reset-label-color"
+                              data-label="${escapeHtml(lbl)}"
+                              class="px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-md hover:bg-slate-100 cursor-pointer">
+                              Neutro
+                            </button>`
+                          : ""
+                      }
+                    </div>
+                  </div>
+                `
+                : "";
+
+              return `
+                <div class="px-5 py-2.5">
+                  <div class="flex items-center justify-between gap-3 text-sm">
+                    <div class="min-w-0 flex items-center gap-2">
+                      <span style="${getLabelBadgeStyleAttr(lbl, state.labelColors)}"
+                        class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium border rounded-md truncate">
+                        <i data-lucide="tag" class="w-3 h-3 opacity-80 shrink-0"></i>
+                        <span class="truncate">${escapeHtml(lbl)}</span>
+                      </span>
+                      ${isDefault ? '<span class="text-xs font-normal text-slate-400 shrink-0">(padrão)</span>' : ""}
+                    </div>
+                    <div class="inline-flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        data-action="toggle-label-color"
+                        data-label="${escapeHtml(lbl)}"
+                        aria-label="Personalizar cor do rótulo ${escapeHtml(lbl)}"
+                        title="Personalizar cor do rótulo"
+                        class="p-1 rounded-md transition-colors cursor-pointer ${
+                          isPickerOpen
+                            ? "text-blue-700 bg-blue-50"
+                            : "text-slate-400 hover:text-blue-700 hover:bg-slate-100"
+                        }"
+                      >
+                        <i data-lucide="palette" class="w-3.5 h-3.5"></i>
+                      </button>
+                      <button
+                        type="button"
+                        data-action="edit-label-item"
+                        data-label="${escapeHtml(lbl)}"
+                        ${isDefault ? "disabled" : ""}
+                        aria-label="Editar rótulo ${escapeHtml(lbl)}"
+                        class="p-1 text-slate-400 hover:text-blue-700 disabled:opacity-30 rounded-md hover:bg-slate-100 transition-colors cursor-pointer"
+                      >
+                        <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                      </button>
+                      <button
+                        type="button"
+                        data-action="delete-label-item"
+                        data-label="${escapeHtml(lbl)}"
+                        ${isDefault || availableLabels.length <= 1 ? "disabled" : ""}
+                        aria-label="Remover rótulo ${escapeHtml(lbl)}"
+                        class="p-1 text-slate-400 hover:text-red-700 disabled:opacity-30 rounded-md hover:bg-red-50 transition-colors cursor-pointer"
+                      >
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                      </button>
+                    </div>
+                  </div>
+                  ${pickerPanelHtml}
+                </div>
+              `;
+            })
+            .join("");
+
           return `
             <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+              ${datalistsHtml}
               <section class="xl:col-span-8 bg-white border border-slate-200 rounded-xl flex flex-col">
                 <div class="px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -1309,84 +2019,131 @@
                   </button>
                 </div>
 
-                <form id="create-rule-form" class="p-6 border-b border-slate-200 bg-slate-50/60 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
-                  <div class="sm:col-span-3">
-                    <label for="rule-match-type" class="block text-xs font-medium text-slate-700 mb-1">Critério</label>
-                    <select id="rule-match-type" class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
-                      ${matchOptions}
-                    </select>
-                  </div>
-                  <div class="sm:col-span-3">
-                    <label for="rule-match-value" class="block text-xs font-medium text-slate-700 mb-1">Valor de correspondência</label>
-                    <input id="rule-match-value" type="text" value="${escapeHtml(
-                      state.ruleFormMatchValue
-                    )}" placeholder="@fornecedor.com.br"
-                      class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
-                  </div>
-                  <div class="sm:col-span-3">
-                    <label for="rule-rotulo" class="block text-xs font-medium text-slate-700 mb-1">Rótulo exato</label>
-                    <input id="rule-rotulo" type="text" value="${escapeHtml(
-                      state.ruleFormRotulo
-                    )}" placeholder="Ex: Jurídico Externo"
-                      class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
-                  </div>
-                  <div class="sm:col-span-3 flex items-end gap-2">
-                    <div class="flex-1 min-w-0">
-                      <label for="rule-categoria" class="block text-xs font-medium text-slate-700 mb-1">Categoria</label>
-                      <select id="rule-categoria" class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
-                        ${catOptions}
+                <form id="create-rule-form" class="p-6 border-b border-slate-200 bg-slate-50/60 space-y-3">
+                  <div class="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                    <div class="sm:col-span-4">
+                      <label for="rule-match-type" class="block text-xs font-medium text-slate-700 mb-1">Critério</label>
+                      <select id="rule-match-type" class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
+                        ${matchOptions}
                       </select>
                     </div>
-                    <button type="submit"
-                      class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                      <i data-lucide="plus" class="w-3.5 h-3.5"></i>
-                      <span>Adicionar</span>
-                    </button>
+                    <div class="sm:col-span-8">
+                      <label for="rule-match-value" class="block text-xs font-medium text-slate-700 mb-1">Valor de correspondência</label>
+                      <input id="rule-match-value" type="text" value="${escapeHtml(
+                        state.ruleFormMatchValue
+                      )}" placeholder="@fornecedor.com.br"
+                        class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                    <div class="sm:col-span-5">
+                      <label for="rule-rotulo-input" class="block text-xs font-medium text-slate-700 mb-1">Rótulos aplicados</label>
+                      ${renderMultiTagInput({
+                        context: "rule-rotulo",
+                        tags: state.ruleFormRotulos,
+                        draft: state.ruleFormRotuloDraft,
+                        datalistId: "rules-rotulo-options",
+                        placeholder: "Ex: Jurídico, Gabinete...",
+                        useLabelColors: true,
+                        compact: true,
+                        inputId: "rule-rotulo-input",
+                        ariaLabel: "Rótulos da regra",
+                      })}
+                    </div>
+                    <div class="sm:col-span-5">
+                      <label for="rule-categoria-input" class="block text-xs font-medium text-slate-700 mb-1">Categorias</label>
+                      ${renderMultiTagInput({
+                        context: "rule-categoria",
+                        tags: state.ruleFormCategorias,
+                        draft: state.ruleFormCategoriaDraft,
+                        datalistId: "rules-categoria-options",
+                        placeholder: "Ex: Revisão, Jurídico...",
+                        fallbackDisplay: "Outro",
+                        useLabelColors: false,
+                        compact: true,
+                        inputId: "rule-categoria-input",
+                        ariaLabel: "Categorias da regra",
+                      })}
+                    </div>
+                    <div class="sm:col-span-2 flex justify-end">
+                      <button type="submit"
+                        class="w-full inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                        <span>Adicionar</span>
+                      </button>
+                    </div>
                   </div>
                 </form>
 
                 ${rulesBody}
               </section>
 
-              <section class="xl:col-span-4 bg-white border border-slate-200 rounded-xl flex flex-col">
-                <div class="px-6 py-4 border-b border-slate-200">
-                  <h2 class="text-base font-semibold text-slate-900">Categorias disponíveis</h2>
-                  <p class="text-xs text-slate-500 mt-0.5">
-                    Opções disponíveis para seleção nas regras e na edição manual das demandas.
-                  </p>
-                </div>
+              <div class="xl:col-span-4 space-y-6">
+                <section class="bg-white border border-slate-200 rounded-xl flex flex-col">
+                  <div class="px-6 py-4 border-b border-slate-200">
+                    <h2 class="text-base font-semibold text-slate-900">Rótulos</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">
+                      Rótulos e cores personalizadas exibidas na fila de demandas, regras e filtros.
+                    </p>
+                  </div>
 
-                <form id="create-category-form" class="p-5 border-b border-slate-100 flex items-center gap-2">
-                  <input id="new-category-input" type="text" value="${escapeHtml(
-                    state.newCategoryInput
-                  )}" placeholder="Nova categoria..."
-                    class="flex-1 min-w-0 px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
-                  <button type="submit"
-                    class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
-                    <span>Incluir</span>
-                  </button>
-                </form>
+                  <form id="create-label-form" class="p-5 border-b border-slate-100 flex items-center gap-2">
+                    <input id="new-label-input" type="text" value="${escapeHtml(
+                      state.newLabelInput
+                    )}" placeholder="Novo rótulo..."
+                      class="flex-1 min-w-0 px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                    <button type="submit"
+                      class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                      <span>Incluir</span>
+                    </button>
+                  </form>
 
-                <div class="divide-y divide-slate-100">
-                  ${state.categories
-                    .map(
-                      (cat) => `
-                    <div class="px-5 py-2.5 flex items-center justify-between gap-3 text-sm">
-                      <span class="text-slate-800 font-medium">${escapeHtml(cat)}</span>
-                      <button type="button" data-action="delete-category" data-category="${escapeHtml(
-                        cat
-                      )}" ${state.categories.length <= 1 ? "disabled" : ""}
-                        aria-label="Remover categoria ${escapeHtml(cat)}"
-                        class="p-1 text-slate-400 hover:text-red-700 disabled:opacity-30 rounded-md hover:bg-red-50 transition-colors cursor-pointer">
-                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
-                      </button>
-                    </div>
-                  `
-                    )
-                    .join("")}
-                </div>
-              </section>
+                  <div class="divide-y divide-slate-100">
+                    ${labelsListHtml}
+                  </div>
+                </section>
+
+                <section class="bg-white border border-slate-200 rounded-xl flex flex-col">
+                  <div class="px-6 py-4 border-b border-slate-200">
+                    <h2 class="text-base font-semibold text-slate-900">Categorias disponíveis</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">
+                      Opções disponíveis para seleção nas regras e na edição manual das demandas.
+                    </p>
+                  </div>
+
+                  <form id="create-category-form" class="p-5 border-b border-slate-100 flex items-center gap-2">
+                    <input id="new-category-input" type="text" value="${escapeHtml(
+                      state.newCategoryInput
+                    )}" placeholder="Nova categoria..."
+                      class="flex-1 min-w-0 px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                    <button type="submit"
+                      class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                      <span>Incluir</span>
+                    </button>
+                  </form>
+
+                  <div class="divide-y divide-slate-100">
+                    ${state.categories
+                      .map(
+                        (cat) => `
+                      <div class="px-5 py-2.5 flex items-center justify-between gap-3 text-sm">
+                        <span class="text-slate-800 font-medium">${escapeHtml(cat)}</span>
+                        <button type="button" data-action="delete-category" data-category="${escapeHtml(
+                          cat
+                        )}" ${state.categories.length <= 1 ? "disabled" : ""}
+                          aria-label="Remover categoria ${escapeHtml(cat)}"
+                          class="p-1 text-slate-400 hover:text-red-700 disabled:opacity-30 rounded-md hover:bg-red-50 transition-colors cursor-pointer">
+                          <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        </button>
+                      </div>
+                    `
+                      )
+                      .join("")}
+                  </div>
+                </section>
+              </div>
             </div>
           `;
         }
@@ -1396,11 +2153,11 @@
           if (!task) return "";
 
           const labelSet = new Set(["Geral", ...getAvailableLabels()]);
-          if (task.rotulo_aplicado) labelSet.add(task.rotulo_aplicado);
+          for (const lbl of state.modalRotulos) labelSet.add(lbl);
           const labels = Array.from(labelSet).filter((v) => v.trim().length > 0);
 
-          const catSet = new Set(state.categories);
-          if (task.categoria) catSet.add(task.categoria);
+          const catSet = new Set(getAvailableCategories());
+          for (const cat of state.modalCategorias) catSet.add(cat);
           if (catSet.size === 0) catSet.add("Outro");
           const cats = Array.from(catSet);
 
@@ -1509,32 +2266,47 @@
 
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label for="modal-rotulo" class="block text-xs font-medium text-slate-700 mb-1">Rótulo</label>
-                      <input id="modal-rotulo" type="text" list="modal-rotulo-options"
-                        value="${escapeHtml(task.rotulo_aplicado || "Geral")}"
-                        placeholder="Selecione ou digite um rótulo (ex: Geral)"
-                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                      <label for="modal-rotulo" class="block text-xs font-medium text-slate-700 mb-1">Rótulos</label>
+                      ${renderMultiTagInput({
+                        context: "modal-rotulo",
+                        tags: state.modalRotulos,
+                        draft: state.modalRotuloDraft,
+                        datalistId: "modal-rotulo-options",
+                        placeholder: "Adicionar rótulo e Enter...",
+                        fallbackDisplay: "Geral",
+                        useLabelColors: true,
+                        compact: false,
+                        inputId: "modal-rotulo",
+                        ariaLabel: "Rótulos da demanda",
+                      })}
                       <datalist id="modal-rotulo-options">
                         ${labels.map((l) => `<option value="${escapeHtml(l)}"></option>`).join("")}
                       </datalist>
                       <p class="text-[11px] text-slate-500 mt-1">
-                        Escolha um rótulo existente ou digite um novo.
+                        Adicione um ou mais rótulos (Enter, vírgula ou Incluir).
                       </p>
                     </div>
 
                     <div>
-                      <label for="modal-categoria" class="block text-xs font-medium text-slate-700 mb-1">Categoria</label>
-                      <select id="modal-categoria"
-                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
-                        ${cats
-                          .map(
-                            (c) =>
-                              `<option value="${escapeHtml(c)}" ${
-                                task.categoria === c ? "selected" : ""
-                              }>${escapeHtml(c)}</option>`
-                          )
-                          .join("")}
-                      </select>
+                      <label for="modal-categoria" class="block text-xs font-medium text-slate-700 mb-1">Categorias</label>
+                      ${renderMultiTagInput({
+                        context: "modal-categoria",
+                        tags: state.modalCategorias,
+                        draft: state.modalCategoriaDraft,
+                        datalistId: "modal-categoria-options",
+                        placeholder: "Adicionar categoria e Enter...",
+                        fallbackDisplay: "Outro",
+                        useLabelColors: false,
+                        compact: false,
+                        inputId: "modal-categoria",
+                        ariaLabel: "Categorias da demanda",
+                      })}
+                      <datalist id="modal-categoria-options">
+                        ${cats.map((c) => `<option value="${escapeHtml(c)}"></option>`).join("")}
+                      </datalist>
+                      <p class="text-[11px] text-slate-500 mt-1">
+                        Adicione uma ou mais categorias (Enter, vírgula ou Incluir).
+                      </p>
                     </div>
                   </div>
 
@@ -1591,7 +2363,7 @@
           const viewMeta =
             state.view === "tasks"
               ? { title: "Fila de Demandas", breadcrumb: "Triagem Executiva / Fila de Demandas" }
-              : { title: "Regras & Categorias", breadcrumb: "Triagem Executiva / Regras & Categorias" };
+              : { title: "Regras e Configurações", breadcrumb: "Triagem Executiva / Regras e Configurações" };
 
           const headerStatusHtml =
             state.isInitialLoading || state.isSaving
@@ -1695,6 +2467,31 @@
               labelInput.select();
             }
           }
+
+          if (state.editingCategoryTaskId) {
+            const categoryInput = document.querySelector(`[data-role="category-input"][data-id="${CSS.escape(state.editingCategoryTaskId)}"]`);
+            if (categoryInput) {
+              categoryInput.focus();
+              categoryInput.select();
+            }
+          }
+
+          if (state.editingLabelItem) {
+            const labelItemInput = document.querySelector(`[data-role="label-item-input"][data-label="${CSS.escape(state.editingLabelItem)}"]`);
+            if (labelItemInput) {
+              labelItemInput.focus();
+              labelItemInput.select();
+            }
+          }
+
+          if (state.pendingFocusTagContext) {
+            const ctx = state.pendingFocusTagContext;
+            state.pendingFocusTagContext = null;
+            const tagEl = document.querySelector(`[data-role="tag-input"][data-context="${CSS.escape(ctx)}"]`);
+            if (tagEl) {
+              tagEl.focus();
+            }
+          }
         }
 
         async function persistDemand(updatedTask) {
@@ -1707,6 +2504,43 @@
           } catch (err) {
             state.apiError =
               err instanceof Error ? err.message : "Erro ao salvar demanda na planilha.";
+          } finally {
+            state.isSaving = false;
+            render();
+          }
+        }
+
+        async function persistNewDemand(newTask) {
+          state.isSaving = true;
+          state.apiError = null;
+          render();
+          try {
+            const responsePayload = await postCreateDemandToGas(newTask);
+            if (responsePayload && responsePayload.demandas) {
+              const nextTasks = responsePayload.demandas;
+              const nextRules = responsePayload.regras || state.rules;
+              state.tasks = nextTasks;
+              if (responsePayload.regras) {
+                state.rules = nextRules;
+              }
+              state.categories = mergeCategoryLists(
+                state.categories.length > 0 ? state.categories : DEFAULT_CATEGORIES,
+                responsePayload.categorias || [],
+                nextRules,
+                nextTasks
+              );
+              saveStoredCategories(state.categories);
+              state.labels = mergeLabelLists(
+                state.labels.length > 0 ? state.labels : ["Geral"],
+                nextRules,
+                nextTasks
+              );
+              saveStoredLabels(state.labels);
+            }
+            state.syncFeedback = `Demanda criada na planilha às ${formatCurrentTime()}`;
+          } catch (err) {
+            state.apiError =
+              err instanceof Error ? err.message : "Erro ao criar demanda na planilha.";
           } finally {
             state.isSaving = false;
             render();
@@ -1727,6 +2561,183 @@
             state.isSaving = false;
             render();
           }
+        }
+
+        async function persistRenamedOrDeletedLabel(nextRules, updatedTasks) {
+          if (!nextRules && updatedTasks.length === 0) {
+            render();
+            return;
+          }
+          state.isSaving = true;
+          state.apiError = null;
+          render();
+          try {
+            const promises = [];
+            if (nextRules) {
+              promises.push(postSaveRulesToGas(nextRules));
+            }
+            for (const task of updatedTasks) {
+              promises.push(postUpdateDemandToGas(task));
+            }
+            await Promise.all(promises);
+            state.syncFeedback = `Rótulos sincronizados às ${formatCurrentTime()}`;
+          } catch (err) {
+            state.apiError =
+              err instanceof Error
+                ? err.message
+                : "Não foi possível sincronizar o rótulo atualizado na Planilha Google.";
+          } finally {
+            state.isSaving = false;
+            render();
+          }
+        }
+
+        function commitLabelItemEdit(oldLabel) {
+          const cleaned = state.labelItemDraft.trim();
+          state.editingLabelItem = null;
+          state.labelItemDraft = "";
+          if (!cleaned || oldLabel === "Geral" || cleaned === oldLabel) {
+            render();
+            return;
+          }
+
+          const replaced = state.labels.map((lbl) => (lbl === oldLabel ? cleaned : lbl));
+          state.labels = mergeLabelLists(replaced, [], []);
+          saveStoredLabels(state.labels);
+
+          const nextColors = { ...state.labelColors };
+          const oldColor = findLabelColorHex(oldLabel, nextColors);
+          for (const k of Object.keys(nextColors)) {
+            if (k.toLowerCase() === oldLabel.toLowerCase()) delete nextColors[k];
+          }
+          if (oldColor) {
+            nextColors[cleaned] = oldColor;
+          }
+          state.labelColors = nextColors;
+          saveStoredLabelColors(nextColors);
+          if (state.colorPickerLabel === oldLabel) {
+            state.colorPickerLabel = cleaned;
+          }
+
+          let rulesChanged = false;
+          const nextRules = state.rules.map((r) => {
+            const items = parseMultiValueField(r.rotulo, "Geral");
+            if (items.includes(oldLabel)) {
+              rulesChanged = true;
+              const updatedList = normalizeTagList(
+                items.map((i) => (i === oldLabel ? cleaned : i)),
+                "Geral"
+              );
+              return { ...r, rotulo: updatedList.join(", ") };
+            }
+            return r;
+          });
+          if (rulesChanged) {
+            state.rules = nextRules;
+          }
+
+          const updatedTasks = [];
+          const nextTasks = state.tasks.map((t) => {
+            const items = getTaskLabels(t);
+            if (items.includes(oldLabel)) {
+              const updatedList = normalizeTagList(
+                items.map((i) => (i === oldLabel ? cleaned : i)),
+                "Geral"
+              );
+              const updated = {
+                ...t,
+                rotulos: updatedList,
+                rotulo_aplicado: updatedList.join(", "),
+              };
+              updatedTasks.push(updated);
+              return updated;
+            }
+            return t;
+          });
+          if (updatedTasks.length > 0) {
+            state.tasks = nextTasks;
+          }
+
+          if (state.labelFilter === oldLabel) {
+            state.labelFilter = cleaned;
+          }
+
+          void persistRenamedOrDeletedLabel(
+            rulesChanged ? nextRules : null,
+            updatedTasks
+          );
+        }
+
+        function deleteLabelItem(labelToDelete) {
+          if (labelToDelete === "Geral") return;
+          state.labels = state.labels.filter((lbl) => lbl !== labelToDelete);
+          saveStoredLabels(state.labels);
+
+          const nextColors = { ...state.labelColors };
+          for (const k of Object.keys(nextColors)) {
+            if (k.toLowerCase() === labelToDelete.toLowerCase()) delete nextColors[k];
+          }
+          state.labelColors = nextColors;
+          saveStoredLabelColors(nextColors);
+          if (state.colorPickerLabel === labelToDelete) {
+            state.colorPickerLabel = null;
+          }
+
+          let rulesChanged = false;
+          const nextRules = state.rules.map((r) => {
+            const items = parseMultiValueField(r.rotulo, "Geral");
+            if (items.includes(labelToDelete)) {
+              rulesChanged = true;
+              const remaining = items.filter((i) => i !== labelToDelete);
+              const updatedList = remaining.length > 0 ? remaining : ["Geral"];
+              return { ...r, rotulo: updatedList.join(", ") };
+            }
+            return r;
+          });
+          if (rulesChanged) {
+            state.rules = nextRules;
+          }
+
+          const updatedTasks = [];
+          const nextTasks = state.tasks.map((t) => {
+            const items = getTaskLabels(t);
+            if (items.includes(labelToDelete)) {
+              const remaining = items.filter((i) => i !== labelToDelete);
+              const updatedList = remaining.length > 0 ? remaining : ["Geral"];
+              const updated = {
+                ...t,
+                rotulos: updatedList,
+                rotulo_aplicado: updatedList.join(", "),
+              };
+              updatedTasks.push(updated);
+              return updated;
+            }
+            return t;
+          });
+          if (updatedTasks.length > 0) {
+            state.tasks = nextTasks;
+          }
+
+          if (state.labelFilter === labelToDelete) {
+            state.labelFilter = "Todos";
+          }
+
+          void persistRenamedOrDeletedLabel(
+            rulesChanged ? nextRules : null,
+            updatedTasks
+          );
+        }
+
+        function setLabelColor(label, hex) {
+          const next = { ...state.labelColors };
+          for (const k of Object.keys(next)) {
+            if (k.toLowerCase() === label.toLowerCase()) delete next[k];
+          }
+          if (hex && /^#[0-9a-f]{6}$/i.test(hex)) {
+            next[label] = hex.toLowerCase();
+          }
+          state.labelColors = next;
+          saveStoredLabelColors(next);
         }
 
         async function handleSyncEmails() {
@@ -1759,8 +2770,8 @@
             "Urgência",
             "Prazo",
             "Prazo Original",
-            "Categoria",
-            "Rótulo Aplicado",
+            "Categorias",
+            "Rótulos Aplicados",
             "Regra Acionada",
             "Solicitante",
             "E-mail Solicitante",
@@ -1779,8 +2790,8 @@
               t.urgencia,
               t.prazo ?? "",
               t.prazo_texto_original ?? "",
-              t.categoria,
-              t.rotulo_aplicado ?? "Geral",
+              getTaskCategories(t).join(", "),
+              getTaskLabels(t).join(", "),
               t.regra_acionada ? "Sim" : "Não",
               t.solicitante_nome,
               t.solicitante_email,
@@ -1824,14 +2835,110 @@
             render();
             return;
           }
-          const cleaned = state.labelDraft.trim() || "Geral";
-          if ((task.rotulo_aplicado || "Geral") === cleaned) {
+          const nextList = parseMultiValueField(state.labelDraft, "Geral");
+          const nextJoined = nextList.join(", ");
+          const currentJoined = getTaskLabels(task).join(", ");
+          if (currentJoined === nextJoined) {
             render();
             return;
           }
-          const updated = { ...task, rotulo_aplicado: cleaned };
+          ensureLabelsTracked(nextList);
+          const updated = { ...task, rotulos: nextList, rotulo_aplicado: nextJoined };
           state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
           void persistDemand(updated);
+        }
+
+        function commitCategory(taskId) {
+          const task = state.tasks.find((t) => t.id === taskId);
+          state.editingCategoryTaskId = null;
+          if (!task) {
+            render();
+            return;
+          }
+          const nextList = parseMultiValueField(state.categoryDraft, "Outro");
+          const nextJoined = nextList.join(", ");
+          const currentJoined = getTaskCategories(task).join(", ");
+          if (currentJoined === nextJoined) {
+            render();
+            return;
+          }
+          ensureCategoriesTracked(nextList);
+          const updated = { ...task, categorias: nextList, categoria: nextJoined };
+          state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+          void persistDemand(updated);
+        }
+
+        function getTagContextConfig(context) {
+          if (context === "modal-rotulo") {
+            return {
+              getList: () => state.modalRotulos,
+              setList: (v) => { state.modalRotulos = v; },
+              getDraft: () => state.modalRotuloDraft,
+              setDraft: (v) => { state.modalRotuloDraft = v; },
+            };
+          }
+          if (context === "modal-categoria") {
+            return {
+              getList: () => state.modalCategorias,
+              setList: (v) => { state.modalCategorias = v; },
+              getDraft: () => state.modalCategoriaDraft,
+              setDraft: (v) => { state.modalCategoriaDraft = v; },
+            };
+          }
+          if (context === "rule-rotulo") {
+            return {
+              getList: () => state.ruleFormRotulos,
+              setList: (v) => { state.ruleFormRotulos = v; },
+              getDraft: () => state.ruleFormRotuloDraft,
+              setDraft: (v) => { state.ruleFormRotuloDraft = v; },
+            };
+          }
+          if (context === "rule-categoria") {
+            return {
+              getList: () => state.ruleFormCategorias,
+              setList: (v) => { state.ruleFormCategorias = v; },
+              getDraft: () => state.ruleFormCategoriaDraft,
+              setDraft: (v) => { state.ruleFormCategoriaDraft = v; },
+            };
+          }
+          if (context === "edit-rule-rotulo" && state.editRuleDraft) {
+            return {
+              getList: () => state.editRuleDraft.rotulos || [],
+              setList: (v) => { if (state.editRuleDraft) state.editRuleDraft.rotulos = v; },
+              getDraft: () => state.editRuleRotuloDraft,
+              setDraft: (v) => { state.editRuleRotuloDraft = v; },
+            };
+          }
+          if (context === "edit-rule-categoria" && state.editRuleDraft) {
+            return {
+              getList: () => state.editRuleDraft.categorias || [],
+              setList: (v) => { if (state.editRuleDraft) state.editRuleDraft.categorias = v; },
+              getDraft: () => state.editRuleCategoriaDraft,
+              setDraft: (v) => { state.editRuleCategoriaDraft = v; },
+            };
+          }
+          return null;
+        }
+
+        function addTagToContext(context, rawText, refocus) {
+          const cfg = getTagContextConfig(context);
+          if (!cfg) return false;
+          const parts = String(rawText ?? "")
+            .split(",")
+            .map((p) => p.trim())
+            .filter(Boolean);
+          if (parts.length === 0) return false;
+          const next = normalizeTagList([...cfg.getList(), ...parts]);
+          cfg.setList(next);
+          cfg.setDraft("");
+          if (refocus) state.pendingFocusTagContext = context;
+          return true;
+        }
+
+        function removeTagFromContext(context, value) {
+          const cfg = getTagContextConfig(context);
+          if (!cfg) return;
+          cfg.setList(cfg.getList().filter((item) => item !== value));
         }
 
         const rootEl = document.getElementById("app");
@@ -1867,6 +2974,7 @@
             state.statusFilter = "Todos";
             state.urgencyFilter = "Todas";
             state.labelFilter = "Todos";
+            state.categoryFilter = "Todas";
             render();
           } else if (action === "export-csv") {
             exportCsv();
@@ -1895,7 +3003,7 @@
             const task = state.tasks.find((t) => t.id === btn.dataset.id);
             if (task) {
               state.editingLabelTaskId = task.id;
-              state.labelDraft = task.rotulo_aplicado || "Geral";
+              state.labelDraft = getTaskLabels(task).join(", ");
               render();
             }
           } else if (action === "save-label") {
@@ -1903,6 +3011,19 @@
           } else if (action === "cancel-label") {
             state.editingLabelTaskId = null;
             state.labelDraft = "";
+            render();
+          } else if (action === "edit-category") {
+            const task = state.tasks.find((t) => t.id === btn.dataset.id);
+            if (task) {
+              state.editingCategoryTaskId = task.id;
+              state.categoryDraft = getTaskCategories(task).join(", ");
+              render();
+            }
+          } else if (action === "save-category") {
+            commitCategory(btn.dataset.id);
+          } else if (action === "cancel-category") {
+            state.editingCategoryTaskId = null;
+            state.categoryDraft = "";
             render();
           } else if (action === "toggle-thread") {
             const id = btn.dataset.id;
@@ -1914,10 +3035,15 @@
               state.modalTask = { ...task };
               state.modalMode = "edit";
               state.modalShowHistory = false;
+              state.modalRotulos = getTaskLabels(task);
+              state.modalCategorias = getTaskCategories(task);
+              state.modalRotuloDraft = "";
+              state.modalCategoriaDraft = "";
               render();
             }
           } else if (action === "open-create-modal") {
             const nowDt = getNowIsoDateTime();
+            const defaultCat = state.categories[0] || "Outro";
             state.modalTask = {
               id: `manual-${uuid()}`,
               triageId: "manual",
@@ -1926,13 +3052,15 @@
               prazo: null,
               prazo_texto_original: null,
               urgencia: "Média",
-              categoria: state.categories[0] || "Outro",
+              categoria: defaultCat,
+              categorias: [defaultCat],
               assunto_original: "Demanda manual",
               solicitante_nome: "Criação manual",
               solicitante_email: "",
               data_email_original: nowDt.slice(0, 10),
               data_hora_email_original: nowDt,
               rotulo_aplicado: "Geral",
+              rotulos: ["Geral"],
               regra_acionada: false,
               status: "A Fazer",
               statusNote: "",
@@ -1943,6 +3071,10 @@
             };
             state.modalMode = "create";
             state.modalShowHistory = false;
+            state.modalRotulos = ["Geral"];
+            state.modalCategorias = [defaultCat];
+            state.modalRotuloDraft = "";
+            state.modalCategoriaDraft = "";
             render();
           } else if (action === "close-modal") {
             state.modalTask = null;
@@ -1958,6 +3090,15 @@
           } else if (action === "toggle-modal-history") {
             state.modalShowHistory = !state.modalShowHistory;
             render();
+          } else if (action === "add-tag-item") {
+            const ctx = btn.dataset.context;
+            const cfg = getTagContextConfig(ctx);
+            if (cfg && addTagToContext(ctx, cfg.getDraft(), true)) {
+              render();
+            }
+          } else if (action === "remove-tag-item") {
+            removeTagFromContext(btn.dataset.context, btn.dataset.value);
+            render();
           } else if (action === "delete-task") {
             const id = btn.dataset.id;
             state.tasks = state.tasks.filter((t) => t.id !== id);
@@ -1971,36 +3112,54 @@
             const rule = state.rules.find((r) => r.id === btn.dataset.id);
             if (rule) {
               state.editingRuleId = rule.id;
-              state.editRuleDraft = { ...rule };
+              state.editRuleDraft = {
+                ...rule,
+                rotulos: parseMultiValueField(rule.rotulo, "Geral"),
+                categorias: parseMultiValueField(rule.categoria, "Outro"),
+              };
+              state.editRuleRotuloDraft = "";
+              state.editRuleCategoriaDraft = "";
               render();
             }
           } else if (action === "save-rule-edit") {
             const id = btn.dataset.id;
+            const d = state.editRuleDraft;
+            if (!d) return;
             const matchTypeEl = document.querySelector('[data-role="edit-rule-matchType"]');
             const matchValueEl = document.querySelector('[data-role="edit-rule-matchValue"]');
-            const rotuloEl = document.querySelector('[data-role="edit-rule-rotulo"]');
-            const categoriaEl = document.querySelector('[data-role="edit-rule-categoria"]');
-            const matchValue = matchValueEl ? matchValueEl.value.trim() : "";
-            const rotulo = rotuloEl ? rotuloEl.value.trim() : "";
-            if (!matchValue || !rotulo) return;
+            const matchValue = matchValueEl ? matchValueEl.value.trim() : d.matchValue.trim();
+
+            addTagToContext("edit-rule-rotulo", state.editRuleRotuloDraft, false);
+            addTagToContext("edit-rule-categoria", state.editRuleCategoriaDraft, false);
+
+            const rotulosFinal = normalizeTagList(d.rotulos || []);
+            const categoriasFinal = normalizeTagList(d.categorias || [], "Outro");
+            if (!matchValue || rotulosFinal.length === 0) return;
+
             const next = state.rules.map((r) =>
               r.id === id
                 ? {
                     ...r,
                     matchType: matchTypeEl ? matchTypeEl.value : r.matchType,
                     matchValue,
-                    rotulo,
-                    categoria: categoriaEl ? categoriaEl.value : r.categoria,
+                    rotulo: rotulosFinal.join(", "),
+                    categoria: categoriasFinal.join(", "),
                   }
                 : r
             );
             state.editingRuleId = null;
             state.editRuleDraft = null;
+            state.editRuleRotuloDraft = "";
+            state.editRuleCategoriaDraft = "";
+            ensureLabelsTracked(rotulosFinal);
+            ensureCategoriesTracked(categoriasFinal);
             state.rules = next;
             void persistRules(next);
           } else if (action === "cancel-rule-edit") {
             state.editingRuleId = null;
             state.editRuleDraft = null;
+            state.editRuleRotuloDraft = "";
+            state.editRuleCategoriaDraft = "";
             render();
           } else if (action === "delete-rule") {
             const id = btn.dataset.id;
@@ -2011,7 +3170,41 @@
             state.rules = [...DEFAULT_RULES];
             state.categories = [...DEFAULT_CATEGORIES];
             saveStoredCategories(state.categories);
+            state.labels = mergeLabelLists(["Geral"], DEFAULT_RULES, state.tasks);
+            saveStoredLabels(state.labels);
             void persistRules(state.rules);
+          } else if (action === "toggle-label-color") {
+            const lbl = btn.dataset.label;
+            state.colorPickerLabel = state.colorPickerLabel === lbl ? null : lbl;
+            render();
+          } else if (action === "set-label-preset-color") {
+            const lbl = btn.dataset.label;
+            const hex = btn.dataset.hex;
+            if (lbl && hex) {
+              setLabelColor(lbl, hex);
+              render();
+            }
+          } else if (action === "reset-label-color") {
+            const lbl = btn.dataset.label;
+            if (lbl) {
+              setLabelColor(lbl, null);
+              render();
+            }
+          } else if (action === "edit-label-item") {
+            const lbl = btn.dataset.label;
+            if (lbl && lbl !== "Geral") {
+              state.editingLabelItem = lbl;
+              state.labelItemDraft = lbl;
+              render();
+            }
+          } else if (action === "save-label-item") {
+            commitLabelItemEdit(btn.dataset.label);
+          } else if (action === "cancel-label-item") {
+            state.editingLabelItem = null;
+            state.labelItemDraft = "";
+            render();
+          } else if (action === "delete-label-item") {
+            deleteLabelItem(btn.dataset.label);
           } else if (action === "delete-category") {
             const cat = btn.dataset.category;
             if (state.categories.length > 1) {
@@ -2041,10 +3234,20 @@
           } else if (target.dataset.role === "label-filter") {
             state.labelFilter = target.value;
             render();
+          } else if (target.dataset.role === "category-filter") {
+            state.categoryFilter = target.value;
+            render();
+          } else if (target.dataset.role === "queue-sort") {
+            state.sortBy = target.value;
+            render();
+          } else if (target.dataset.role === "label-custom-color") {
+            const lbl = target.dataset.label;
+            if (lbl) {
+              setLabelColor(lbl, target.value);
+              render();
+            }
           } else if (target.id === "rule-match-type") {
             state.ruleFormMatchType = target.value;
-          } else if (target.id === "rule-categoria") {
-            state.ruleFormCategoria = target.value;
           }
         });
 
@@ -2068,10 +3271,28 @@
             state.obsDraft = target.value;
           } else if (target.dataset.role === "label-input") {
             state.labelDraft = target.value;
+          } else if (target.dataset.role === "category-input") {
+            state.categoryDraft = target.value;
+          } else if (target.dataset.role === "label-item-input") {
+            state.labelItemDraft = target.value;
+          } else if (target.dataset.role === "edit-rule-matchValue" && state.editRuleDraft) {
+            state.editRuleDraft.matchValue = target.value;
+          } else if (target.dataset.role === "tag-input") {
+            const ctx = target.dataset.context;
+            const cfg = getTagContextConfig(ctx);
+            if (cfg) {
+              if (target.value.includes(",")) {
+                if (addTagToContext(ctx, target.value, true)) {
+                  render();
+                  return;
+                }
+              }
+              cfg.setDraft(target.value);
+            }
           } else if (target.id === "rule-match-value") {
             state.ruleFormMatchValue = target.value;
-          } else if (target.id === "rule-rotulo") {
-            state.ruleFormRotulo = target.value;
+          } else if (target.id === "new-label-input") {
+            state.newLabelInput = target.value;
           } else if (target.id === "new-category-input") {
             state.newCategoryInput = target.value;
           }
@@ -2102,6 +3323,31 @@
                 return;
               }
               commitLabel(target.dataset.id);
+            } else if (target.dataset.role === "category-input") {
+              const related = e.relatedTarget;
+              if (related && related.dataset && related.dataset.categoryAction === "cancel") {
+                return;
+              }
+              commitCategory(target.dataset.id);
+            } else if (target.dataset.role === "tag-input") {
+              const ctx = target.dataset.context;
+              const related = e.relatedTarget;
+              if (
+                related &&
+                related.dataset &&
+                (related.dataset.action === "add-tag-item" ||
+                  related.dataset.action === "remove-tag-item" ||
+                  related.dataset.action === "close-modal" ||
+                  related.dataset.action === "cancel-rule-edit")
+              ) {
+                return;
+              }
+              const cfg = getTagContextConfig(ctx);
+              if (cfg && cfg.getDraft().trim()) {
+                if (addTagToContext(ctx, cfg.getDraft(), false)) {
+                  render();
+                }
+              }
             }
           },
           true
@@ -2132,6 +3378,47 @@
               state.labelDraft = "";
               render();
             }
+          } else if (target.dataset.role === "category-input") {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitCategory(target.dataset.id);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              state.editingCategoryTaskId = null;
+              state.categoryDraft = "";
+              render();
+            }
+          } else if (target.dataset.role === "label-item-input") {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitLabelItemEdit(target.dataset.label);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              state.editingLabelItem = null;
+              state.labelItemDraft = "";
+              render();
+            }
+          } else if (target.dataset.role === "tag-input") {
+            const ctx = target.dataset.context;
+            const cfg = getTagContextConfig(ctx);
+            if (!cfg) return;
+            if (e.key === "Enter" || e.key === ",") {
+              if (cfg.getDraft().trim()) {
+                e.preventDefault();
+                if (addTagToContext(ctx, cfg.getDraft(), true)) {
+                  render();
+                }
+              } else if (e.key === ",") {
+                e.preventDefault();
+              }
+            } else if (e.key === "Backspace" && !cfg.getDraft()) {
+              const current = cfg.getList();
+              if (current.length > 0) {
+                cfg.setList(current.slice(0, -1));
+                state.pendingFocusTagContext = ctx;
+                render();
+              }
+            }
           }
         });
 
@@ -2144,12 +3431,21 @@
             const descricao = document.getElementById("modal-descricao").value.trim();
             const prazoVal = document.getElementById("modal-prazo").value.trim();
             const urgencia = document.getElementById("modal-urgencia").value;
-            const rotulo = document.getElementById("modal-rotulo").value.trim() || "Geral";
-            const categoria = document.getElementById("modal-categoria").value.trim() || "Outro";
             const status = document.getElementById("modal-status").value;
             const statusNote = document.getElementById("modal-status-note").value.trim() || undefined;
             const observacoes = document.getElementById("modal-observacoes").value.trim() || undefined;
             const isCompleted = status === "Concluído";
+
+            addTagToContext("modal-rotulo", state.modalRotuloDraft, false);
+            addTagToContext("modal-categoria", state.modalCategoriaDraft, false);
+
+            const rotulosFinal = normalizeTagList(state.modalRotulos, "Geral");
+            const categoriasFinal = normalizeTagList(state.modalCategorias, "Outro");
+            const rotuloJoined = rotulosFinal.join(", ");
+            const categoriaJoined = categoriasFinal.join(", ");
+
+            ensureCategoriesTracked(categoriasFinal);
+            ensureLabelsTracked(rotulosFinal);
 
             const base = state.modalTask;
             const updated = {
@@ -2158,8 +3454,10 @@
               descricao,
               prazo: prazoVal || null,
               urgencia,
-              rotulo_aplicado: rotulo,
-              categoria,
+              rotulos: rotulosFinal,
+              rotulo_aplicado: rotuloJoined,
+              categorias: categoriasFinal,
+              categoria: categoriaJoined,
               status,
               statusNote,
               observacoes,
@@ -2167,7 +3465,8 @@
               completedAt: isCompleted ? base.completedAt ?? new Date().toISOString() : undefined,
             };
 
-            if (state.modalMode === "create") {
+            const isCreateMode = state.modalMode === "create";
+            if (isCreateMode) {
               if (!updated.historico_mensagens || updated.historico_mensagens.length === 0) {
                 updated.historico_mensagens = [
                   {
@@ -2184,33 +3483,53 @@
               state.tasks = state.tasks.map((t) => (t.id === updated.id ? updated : t));
             }
             state.modalTask = null;
-            void persistDemand(updated);
+            state.modalRotulos = [];
+            state.modalCategorias = [];
+            state.modalRotuloDraft = "";
+            state.modalCategoriaDraft = "";
+            if (isCreateMode) {
+              void persistNewDemand(updated);
+            } else {
+              void persistDemand(updated);
+            }
           } else if (form.id === "create-rule-form") {
             const matchType = document.getElementById("rule-match-type").value;
             const matchValue = document.getElementById("rule-match-value").value.trim();
-            const rotulo = document.getElementById("rule-rotulo").value.trim();
-            const categoria = document.getElementById("rule-categoria").value.trim() || "Outro";
-            if (!matchValue || !rotulo) return;
+
+            addTagToContext("rule-rotulo", state.ruleFormRotuloDraft, false);
+            addTagToContext("rule-categoria", state.ruleFormCategoriaDraft, false);
+
+            const rotulosFinal = normalizeTagList(state.ruleFormRotulos);
+            const categoriasFinal = normalizeTagList(state.ruleFormCategorias, "Outro");
+            if (!matchValue || rotulosFinal.length === 0) return;
 
             const newRule = {
               id: uuid(),
               ativo: true,
               matchType,
               matchValue,
-              rotulo,
-              categoria,
+              rotulo: rotulosFinal.join(", "),
+              categoria: categoriasFinal.join(", "),
             };
+            ensureLabelsTracked(rotulosFinal);
+            ensureCategoriesTracked(categoriasFinal);
             state.ruleFormMatchValue = "";
-            state.ruleFormRotulo = "";
+            state.ruleFormRotulos = [];
+            state.ruleFormCategorias = [state.categories[0] || "Outro"];
+            state.ruleFormRotuloDraft = "";
+            state.ruleFormCategoriaDraft = "";
             state.rules = [newRule, ...state.rules];
             void persistRules(state.rules);
+          } else if (form.id === "create-label-form") {
+            const val = document.getElementById("new-label-input").value.trim();
+            if (!val) return;
+            ensureLabelsTracked([val]);
+            state.newLabelInput = "";
+            render();
           } else if (form.id === "create-category-form") {
             const val = document.getElementById("new-category-input").value.trim();
             if (!val) return;
-            if (!state.categories.some((c) => c.toLowerCase() === val.toLowerCase())) {
-              state.categories = [...state.categories, val];
-              saveStoredCategories(state.categories);
-            }
+            ensureCategoriesTracked([val]);
             state.newCategoryInput = "";
             render();
           }
