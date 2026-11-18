@@ -17,6 +17,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
+        darkMode: "class",
         theme: {
           extend: {
             fontFamily: {
@@ -28,8 +29,26 @@
         },
       };
     </script>
+    <script>
+      (() => {
+        try {
+          const saved = localStorage.getItem("app_theme");
+          const prefersDark =
+            window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          const isDark = saved === "dark" || (saved !== "light" && prefersDark);
+          document.documentElement.classList.toggle("dark", isDark);
+        } catch {
+          // Ignore storage access errors
+        }
+      })();
+    </script>
     <script src="https://unpkg.com/lucide@0.546.0/dist/umd/lucide.min.js"></script>
     <style>
+      html.dark {
+        color-scheme: dark;
+        color: #f1f5f9;
+        background-color: #020617;
+      }
       body {
         font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif;
         -webkit-font-smoothing: antialiased;
@@ -55,8 +74,8 @@
       }
     </style>
   </head>
-  <body class="bg-slate-50 text-slate-900 antialiased">
-    <div id="app" class="min-h-screen flex bg-slate-50 text-slate-900"></div>
+  <body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 antialiased transition-colors">
+    <div id="app" class="min-h-screen flex bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors"></div>
 
     <script>
       (() => {
@@ -139,6 +158,30 @@
         const STORAGE_LABEL_COLORS_KEY = "triagem_executiva_label_colors_v1";
         const STORAGE_VIEWED_IDS_KEY = "triagem_executiva_viewed_ids_v1";
         const STORAGE_DELETED_IDS_KEY = "ids_excluidos";
+        const STORAGE_THEME_KEY = "app_theme";
+
+        function getInitialTheme() {
+          try {
+            const saved = localStorage.getItem(STORAGE_THEME_KEY);
+            if (saved === "dark" || saved === "light") return saved;
+          } catch {
+            // Ignore storage access errors
+          }
+          if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            return "dark";
+          }
+          return "light";
+        }
+
+        function applyTheme(theme) {
+          const isDark = theme === "dark";
+          document.documentElement.classList.toggle("dark", isDark);
+          try {
+            localStorage.setItem(STORAGE_THEME_KEY, theme);
+          } catch {
+            // Ignore storage quota errors
+          }
+        }
 
         const LABEL_COLOR_PALETTE = [
           { name: "Azul", hex: "#2563eb" },
@@ -351,13 +394,24 @@
         }
 
         function getLabelBadgeStyleAttr(label, labelColors) {
+          const isDark = state && state.theme === "dark";
           const hex = findLabelColorHex(label, labelColors);
           const rgb = hex ? parseHexRgb(hex) : null;
           if (!rgb) {
+            if (isDark) {
+              return "background-color: rgba(148, 163, 184, 0.16); border-color: rgba(148, 163, 184, 0.34); color: #e2e8f0;";
+            }
             return "background-color: rgba(100, 116, 139, 0.09); border-color: rgba(100, 116, 139, 0.24); color: #334155;";
           }
           const { r, g, b } = rgb;
           const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+          if (isDark) {
+            const mix = luminance < 0.45 ? 0.62 : 0.46;
+            const textR = Math.round(r + (255 - r) * mix);
+            const textG = Math.round(g + (255 - g) * mix);
+            const textB = Math.round(b + (255 - b) * mix);
+            return `background-color: rgba(${r}, ${g}, ${b}, 0.24); border-color: rgba(${r}, ${g}, ${b}, 0.48); color: rgb(${textR}, ${textG}, ${textB});`;
+          }
           const factor = luminance > 0.52 ? 0.44 : luminance > 0.38 ? 0.68 : 0.82;
           const textR = Math.round(r * factor);
           const textG = Math.round(g * factor);
@@ -450,8 +504,9 @@
           const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
 
           let text = "Sem prazo";
-          let containerClass = "bg-slate-100 text-slate-500 border-slate-200";
-          let iconClass = "text-slate-400";
+          let containerClass =
+            "bg-slate-100 text-slate-500 border-slate-200 dark:bg-slate-800/80 dark:text-slate-400 dark:border-slate-700";
+          let iconClass = "text-slate-400 dark:text-slate-500";
 
           if (match) {
             const formatted = formatDisplayDate(trimmed, "Sem prazo");
@@ -466,20 +521,24 @@
 
               if (deadlineIso < todayIso) {
                 text = `${formatted} (Atrasado)`;
-                containerClass = "bg-red-50 text-red-700 border-red-200 font-medium";
-                iconClass = "text-red-600";
+                containerClass =
+                  "bg-red-50 text-red-700 border-red-200 font-medium dark:bg-red-950/60 dark:text-red-300 dark:border-red-800/70";
+                iconClass = "text-red-600 dark:text-red-400";
               } else if (deadlineIso === todayIso) {
                 text = `${formatted} (Hoje)`;
-                containerClass = "bg-amber-50 text-amber-800 border-amber-200 font-medium";
-                iconClass = "text-amber-600";
+                containerClass =
+                  "bg-amber-50 text-amber-800 border-amber-200 font-medium dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/70";
+                iconClass = "text-amber-600 dark:text-amber-400";
               } else if (deadlineIso === tomorrowIso) {
                 text = `${formatted} (Amanhã)`;
-                containerClass = "bg-amber-50 text-amber-800 border-amber-200 font-medium";
-                iconClass = "text-amber-600";
+                containerClass =
+                  "bg-amber-50 text-amber-800 border-amber-200 font-medium dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/70";
+                iconClass = "text-amber-600 dark:text-amber-400";
               } else {
                 text = formatted;
-                containerClass = "bg-emerald-50 text-emerald-700 border-emerald-200";
-                iconClass = "text-emerald-600";
+                containerClass =
+                  "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/70";
+                iconClass = "text-emerald-600 dark:text-emerald-400";
               }
             }
           }
@@ -976,8 +1035,11 @@
         }
 
         const initialCategories = loadStoredCategories();
+        const initialTheme = getInitialTheme();
+        applyTheme(initialTheme);
 
         const state = {
+          theme: initialTheme,
           view: "tasks",
           mobileMenuOpen: false,
           tasks: [],
@@ -1304,7 +1366,7 @@
                       })
                       .join("")}
                     <i data-lucide="chevron-down" class="w-3 h-3 shrink-0 transition-transform ${
-                      isOpen ? "rotate-180 text-blue-600" : "text-slate-400"
+                      isOpen ? "rotate-180 text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-slate-500"
                     }"></i>
                   </button>`
                 : `<button type="button" data-action="toggle-card-picker" data-id="${escapeHtml(
@@ -1313,24 +1375,24 @@
                     title="Clique para selecionar ou criar categorias"
                     class="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium border rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       isOpen
-                        ? "bg-blue-50 text-blue-700 border-blue-300 ring-2 ring-blue-500/20"
-                        : "text-slate-700 bg-white hover:bg-blue-50 hover:text-blue-700 border-slate-200 hover:border-blue-200"
+                        ? "bg-blue-50 text-blue-700 border-blue-300 ring-2 ring-blue-500/20 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-700"
+                        : "text-slate-700 bg-white hover:bg-blue-50 hover:text-blue-700 border-slate-200 hover:border-blue-200 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-blue-950/50 dark:hover:text-blue-300 dark:hover:border-blue-700"
                     }">
                     <i data-lucide="folder" class="w-3 h-3 shrink-0 ${
-                      isOpen ? "text-blue-600" : "text-slate-400"
+                      isOpen ? "text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-slate-500"
                     }"></i>
                     <span>${escapeHtml(currentSelected.join(" / "))}</span>
                     <i data-lucide="chevron-down" class="w-3 h-3 shrink-0 transition-transform ${
-                      isOpen ? "rotate-180 text-blue-600" : "text-slate-400"
+                      isOpen ? "rotate-180 text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-slate-500"
                     }"></i>
                   </button>`
               : `<button type="button" data-action="toggle-modal-picker" data-type="${escapeHtml(
                   mode
                 )}" aria-expanded="${isOpen ? "true" : "false"}"
-                  class="w-full min-h-[38px] px-2.5 py-1.5 bg-white border rounded-lg flex items-center justify-between gap-2 text-left transition-colors cursor-pointer ${
+                  class="w-full min-h-[38px] px-2.5 py-1.5 bg-white dark:bg-slate-800 border rounded-lg flex items-center justify-between gap-2 text-left transition-colors cursor-pointer ${
                     isOpen
-                      ? "border-blue-600 ring-2 ring-blue-600/20"
-                      : "border-slate-200 hover:border-slate-300"
+                      ? "border-blue-600 ring-2 ring-blue-600/20 dark:border-blue-500"
+                      : "border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-600"
                   }">
                   <div class="flex flex-wrap items-center gap-1.5 flex-1 min-w-0">
                     ${currentSelected
@@ -1348,14 +1410,14 @@
                             <span>${escapeHtml(item)}</span>
                           </span>`;
                         }
-                        return `<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 rounded-md whitespace-nowrap">
+                        return `<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 dark:bg-slate-700/80 dark:text-slate-200 dark:border-slate-600 rounded-md whitespace-nowrap">
                           <span>${escapeHtml(item)}</span>
                         </span>`;
                       })
                       .join("")}
                   </div>
                   <i data-lucide="chevron-down" class="w-4 h-4 shrink-0 transition-transform ${
-                    isOpen ? "rotate-180 text-blue-600" : "text-slate-400"
+                    isOpen ? "rotate-180 text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-slate-500"
                   }"></i>
                 </button>`;
 
@@ -1366,27 +1428,27 @@
           const popoverHtml = isOpen
             ? `<div role="dialog" aria-label="${
                 isLabel ? "Selecionar rótulos" : "Selecionar categorias"
-              }" class="absolute left-0 top-full mt-1.5 z-50 ${popoverWidthCls} bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
-                <div class="p-2 border-b border-slate-100 bg-slate-50/80 flex items-center gap-1.5">
+              }" class="absolute left-0 top-full mt-1.5 z-50 ${popoverWidthCls} bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 rounded-xl shadow-lg dark:shadow-black/50 overflow-hidden">
+                <div class="p-2 border-b border-slate-100 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-800/70 flex items-center gap-1.5">
                   <input type="text" data-role="picker-new-input"
                     value="${escapeHtml(state.pickerNewDraft)}"
                     placeholder="${placeholder}" aria-label="${ariaAdd}"
-                    class="flex-1 min-w-0 px-2.5 py-1.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                    class="flex-1 min-w-0 px-2.5 py-1.5 text-xs text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-950 dark:border-slate-700 dark:placeholder:text-slate-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
                   <button type="button" data-action="picker-add-option"
                     aria-label="Adicionar ${isLabel ? "rótulo" : "categoria"}"
                     title="Adicionar e marcar"
-                    class="inline-flex items-center justify-center p-1.5 text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors shrink-0 cursor-pointer">
+                    class="inline-flex items-center justify-center p-1.5 text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors shrink-0 cursor-pointer">
                     <i data-lucide="plus" class="w-3.5 h-3.5"></i>
                   </button>
                 </div>
-                <div data-role="picker-list" class="max-h-56 overflow-y-auto p-1.5 divide-y divide-slate-50">
+                <div data-role="picker-list" class="max-h-56 overflow-y-auto p-1.5 divide-y divide-slate-50 dark:divide-slate-800/70">
                   ${sortedOptions
                     .map((opt) => {
                       const checked = isSelected(opt);
                       const hex = isLabel ? findLabelColorHex(opt, state.labelColors) : undefined;
                       const optionDisplay = isLabel
                         ? `<span class="inline-flex items-center gap-2 min-w-0 flex-1">
-                            <span class="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
+                            <span class="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10 dark:border-white/20"
                               style="background-color: ${escapeHtml(hex || "#64748b")};"></span>
                             <span style="${getLabelBadgeStyleAttr(opt, state.labelColors)}"
                               class="inline-flex items-center px-2 py-0.5 text-xs font-medium border rounded-md truncate">
@@ -1394,31 +1456,33 @@
                             </span>
                           </span>`
                         : `<span class="text-xs font-medium truncate flex-1 ${
-                            checked ? "text-slate-900" : "text-slate-700"
+                            checked ? "text-slate-900 dark:text-slate-100" : "text-slate-700 dark:text-slate-300"
                           }">${escapeHtml(opt)}</span>`;
                       return `<label class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors ${
-                        checked ? "bg-blue-50/70" : "hover:bg-slate-50"
+                        checked
+                          ? "bg-blue-50/70 dark:bg-blue-950/50"
+                          : "hover:bg-slate-50 dark:hover:bg-slate-800/80"
                       }">
                         <input type="checkbox" data-role="picker-checkbox" data-value="${escapeHtml(
                           opt
                         )}" ${checked ? "checked" : ""}
-                          class="w-3.5 h-3.5 rounded border-slate-300 text-blue-700 focus:ring-blue-600/30 shrink-0 cursor-pointer" />
+                          class="w-3.5 h-3.5 rounded border-slate-300 dark:border-slate-600 dark:bg-slate-800 text-blue-700 dark:text-blue-500 focus:ring-blue-600/30 shrink-0 cursor-pointer" />
                         ${optionDisplay}
                         ${
                           checked
-                            ? '<i data-lucide="check" class="w-3.5 h-3.5 text-blue-700 shrink-0"></i>'
+                            ? '<i data-lucide="check" class="w-3.5 h-3.5 text-blue-700 dark:text-blue-400 shrink-0"></i>'
                             : ""
                         }
                       </label>`;
                     })
                     .join("")}
                 </div>
-                <div class="px-2.5 py-1.5 border-t border-slate-100 bg-slate-50/60 flex items-center justify-between text-[11px] text-slate-500">
+                <div class="px-2.5 py-1.5 border-t border-slate-100 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-800/70 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
                   <span class="tabular-nums">${currentSelected.length} ${
                     currentSelected.length === 1 ? "selecionado" : "selecionados"
                   }</span>
                   <button type="button" data-action="close-picker"
-                    class="font-medium text-blue-700 hover:text-blue-900 cursor-pointer">
+                    class="font-medium text-blue-700 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 cursor-pointer">
                     Concluir
                   </button>
                 </div>
@@ -1452,7 +1516,7 @@
                       : "";
                     const baseCls = useLabelColors
                       ? "border font-medium"
-                      : "bg-slate-100 text-slate-700 border border-slate-200 font-medium";
+                      : "bg-slate-100 text-slate-700 border border-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-700 font-medium";
                     const sizeCls = compact
                       ? "px-1.5 py-0.5 text-[11px]"
                       : "px-2 py-0.5 text-xs";
@@ -1471,7 +1535,7 @@
                   })
                   .join("")
               : fallbackDisplay
-              ? `<span class="text-[11px] text-slate-400 italic px-1">Padrão: ${escapeHtml(
+              ? `<span class="text-[11px] text-slate-400 dark:text-slate-500 italic px-1">Padrão: ${escapeHtml(
                   fallbackDisplay
                 )}</span>`
               : "";
@@ -1480,7 +1544,7 @@
           const btnSizeCls = compact ? "px-2 py-1 text-[11px]" : "px-2.5 py-1.5 text-xs";
 
           return `
-            <div class="border border-slate-200 rounded-lg bg-white p-1.5 space-y-1.5 focus-within:ring-2 focus-within:ring-blue-600/20 focus-within:border-blue-600">
+            <div class="border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 p-1.5 space-y-1.5 focus-within:ring-2 focus-within:ring-blue-600/20 focus-within:border-blue-600 dark:focus-within:border-blue-500">
               <div class="flex flex-wrap items-center gap-1.5">${chipsHtml}</div>
               <div class="flex items-center gap-1.5">
                 <input
@@ -1492,12 +1556,12 @@
                   value="${escapeHtml(draft || "")}"
                   placeholder="${escapeHtml(placeholder || "")}"
                   aria-label="${escapeHtml(ariaLabel || placeholder || "")}"
-                  class="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-md focus:outline-none focus:bg-white focus:border-blue-500 ${inputSizeCls} text-slate-900"
+                  class="flex-1 min-w-0 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md focus:outline-none focus:bg-white dark:focus:bg-slate-950 focus:border-blue-500 ${inputSizeCls} text-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500"
                 />
                 <button type="button" data-action="add-tag-item" data-context="${escapeHtml(
                   context
                 )}"
-                  class="inline-flex items-center gap-1 font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${btnSizeCls}">
+                  class="inline-flex items-center gap-1 font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 dark:text-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${btnSizeCls}">
                   <i data-lucide="plus" class="w-3 h-3"></i>
                   <span>Incluir</span>
                 </button>
@@ -1510,19 +1574,23 @@
           const configs = {
             "A Fazer": {
               icon: "circle",
-              classes: "bg-slate-100 text-slate-700 border-slate-200",
+              classes:
+                "bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700",
             },
             Iniciado: {
               icon: "play-circle",
-              classes: "bg-blue-50 text-blue-700 border-blue-200",
+              classes:
+                "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800/70",
             },
             Aguardando: {
               icon: "clock",
-              classes: "bg-amber-50 text-amber-800 border-amber-200",
+              classes:
+                "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/70",
             },
             Concluído: {
               icon: "check-circle-2",
-              classes: "bg-emerald-50 text-emerald-700 border-emerald-200",
+              classes:
+                "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/70",
             },
           };
           const cfg = configs[status] || configs["A Fazer"];
@@ -1534,9 +1602,9 @@
 
         function renderUrgencyIndicator(level) {
           const configs = {
-            Alta: { text: "text-red-700", dot: "bg-red-600" },
-            Média: { text: "text-amber-700", dot: "bg-amber-500" },
-            Baixa: { text: "text-slate-600", dot: "bg-slate-400" },
+            Alta: { text: "text-red-700 dark:text-red-400", dot: "bg-red-600 dark:bg-red-500" },
+            Média: { text: "text-amber-700 dark:text-amber-400", dot: "bg-amber-500 dark:bg-amber-400" },
+            Baixa: { text: "text-slate-600 dark:text-slate-400", dot: "bg-slate-400 dark:bg-slate-500" },
           };
           const cfg = configs[level] || configs["Baixa"];
           return `<span class="inline-flex items-center gap-1.5 text-xs font-medium whitespace-nowrap ${cfg.text}">
@@ -1556,7 +1624,7 @@
             <div class="flex flex-col h-full justify-between p-4">
               <div>
                 <div class="px-2 py-2 mb-6">
-                  <span class="font-display text-base font-bold tracking-tight text-slate-900 whitespace-nowrap">
+                  <span class="font-display text-base font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap">
                     Triagem Executiva
                   </span>
                 </div>
@@ -1565,58 +1633,58 @@
                   <button type="button" data-action="nav" data-view="tasks"
                     class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       state.view === "tasks"
-                        ? "bg-blue-50 text-blue-700"
-                        : "text-slate-700 hover:bg-slate-100"
+                        ? "bg-blue-50 text-blue-700 dark:bg-blue-950/70 dark:text-blue-300"
+                        : "text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800/80"
                     }">
                     <span class="inline-flex items-center gap-2.5">
                       <i data-lucide="list-checks" class="w-4 h-4 shrink-0"></i>
                       <span>Fila de Demandas</span>
                     </span>
-                    <span class="font-mono tabular-nums text-xs text-slate-500">${pendingCount}</span>
+                    <span class="font-mono tabular-nums text-xs text-slate-500 dark:text-slate-400">${pendingCount}</span>
                   </button>
 
                   <button type="button" data-action="nav" data-view="rules"
                     class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       state.view === "rules"
-                        ? "bg-blue-50 text-blue-700"
-                        : "text-slate-700 hover:bg-slate-100"
+                        ? "bg-blue-50 text-blue-700 dark:bg-blue-950/70 dark:text-blue-300"
+                        : "text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800/80"
                     }">
                     <span class="inline-flex items-center gap-2.5">
                       <i data-lucide="sliders-horizontal" class="w-4 h-4 shrink-0"></i>
                       <span>Regras e Configurações</span>
                     </span>
-                    <span class="font-mono tabular-nums text-xs text-slate-500">${activeRulesCount}</span>
+                    <span class="font-mono tabular-nums text-xs text-slate-500 dark:text-slate-400">${activeRulesCount}</span>
                   </button>
                 </nav>
 
-                <div class="mt-8 pt-6 border-t border-slate-200 px-2 space-y-3">
-                  <div class="text-xs font-medium text-slate-500">Resumo da caixa</div>
+                <div class="mt-8 pt-6 border-t border-slate-200 dark:border-slate-800 px-2 space-y-3">
+                  <div class="text-xs font-medium text-slate-500 dark:text-slate-400">Resumo da caixa</div>
                   <dl class="space-y-2 text-xs">
                     <div class="flex items-center justify-between">
-                      <dt class="text-slate-600">Demandas pendentes</dt>
-                      <dd class="font-mono tabular-nums font-semibold text-slate-900">${pendingCount}</dd>
+                      <dt class="text-slate-600 dark:text-slate-400">Demandas pendentes</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">${pendingCount}</dd>
                     </div>
                     <div class="flex items-center justify-between">
-                      <dt class="text-slate-600">Urgência alta</dt>
-                      <dd class="font-mono tabular-nums font-semibold text-red-700">${highCount}</dd>
+                      <dt class="text-slate-600 dark:text-slate-400">Urgência alta</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-red-700 dark:text-red-400">${highCount}</dd>
                     </div>
                     <div class="flex items-center justify-between">
-                      <dt class="text-slate-600">Em aguardo</dt>
-                      <dd class="font-mono tabular-nums font-semibold text-amber-700">${waitingCount}</dd>
+                      <dt class="text-slate-600 dark:text-slate-400">Em aguardo</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-amber-700 dark:text-amber-400">${waitingCount}</dd>
                     </div>
                     <div class="flex items-center justify-between">
-                      <dt class="text-slate-600">Novas mensagens</dt>
-                      <dd class="font-mono tabular-nums font-semibold text-blue-700">${unreadCount}</dd>
+                      <dt class="text-slate-600 dark:text-slate-400">Novas mensagens</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-blue-700 dark:text-blue-400">${unreadCount}</dd>
                     </div>
                     <div class="flex items-center justify-between">
-                      <dt class="text-slate-600">Regras ativas</dt>
-                      <dd class="font-mono tabular-nums font-semibold text-slate-900">${activeRulesCount}</dd>
+                      <dt class="text-slate-600 dark:text-slate-400">Regras ativas</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">${activeRulesCount}</dd>
                     </div>
                   </dl>
                 </div>
               </div>
 
-              <div class="pt-4 border-t border-slate-200 px-2 text-xs text-slate-500 leading-relaxed">
+              <div class="pt-4 border-t border-slate-200 dark:border-slate-800 px-2 text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                 Sincronização integrada com Gmail e Planilha Google via Google Apps Script.
               </div>
             </div>
@@ -1626,9 +1694,9 @@
         function renderTasksView() {
           if (state.isInitialLoading) {
             return `
-              <section class="bg-white border border-slate-200 rounded-xl p-12 flex flex-col items-center justify-center text-center">
-                <i data-lucide="loader-2" class="w-6 h-6 text-blue-700 animate-spin mb-3"></i>
-                <p class="text-sm font-medium text-slate-800">
+              <section class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-xl p-12 flex flex-col items-center justify-center text-center">
+                <i data-lucide="loader-2" class="w-6 h-6 text-blue-700 dark:text-blue-400 animate-spin mb-3"></i>
+                <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
                   Carregando demandas e regras da Planilha Google...
                 </p>
               </section>
@@ -1637,23 +1705,23 @@
 
           if (state.tasks.length === 0) {
             return `
-              <section class="bg-white border border-slate-200 rounded-xl p-12 flex flex-col items-center justify-center text-center">
-                <div class="w-11 h-11 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center mb-4">
+              <section class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-xl p-12 flex flex-col items-center justify-center text-center">
+                <div class="w-11 h-11 rounded-xl bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400 flex items-center justify-center mb-4">
                   <i data-lucide="list-checks" class="w-5 h-5"></i>
                 </div>
-                <h2 class="text-base font-semibold text-slate-900">Sua fila de demandas está vazia</h2>
-                <p class="text-sm text-slate-500 max-w-md mt-1.5 leading-relaxed">
-                  Clique em <strong class="font-medium text-slate-700">Sincronizar E-mails</strong> para
+                <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">Sua fila de demandas está vazia</h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400 max-w-md mt-1.5 leading-relaxed">
+                  Clique em <strong class="font-medium text-slate-700 dark:text-slate-200">Sincronizar E-mails</strong> para
                   varrer novas mensagens do Gmail pelo Google Apps Script ou crie uma demanda manual.
                 </p>
                 <div class="mt-5 flex flex-wrap items-center justify-center gap-2.5">
                   <button type="button" data-action="sync-emails" ${state.isSyncing ? "disabled" : ""}
-                    class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                    class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                     <i data-lucide="refresh-cw" class="w-4 h-4 ${state.isSyncing ? "animate-spin" : ""}"></i>
                     <span>${state.isSyncing ? "Sincronizando..." : "Sincronizar E-mails"}</span>
                   </button>
                   <button type="button" data-action="open-create-modal"
-                    class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                    class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 transition-colors rounded-lg whitespace-nowrap shrink-0 cursor-pointer">
                     <i data-lucide="plus" class="w-4 h-4"></i>
                     <span>Criar demanda manual</span>
                   </button>
@@ -1687,10 +1755,12 @@
             const active = state.statusFilter === st;
             return `<button type="button" data-action="status-filter" data-value="${escapeHtml(st)}"
               class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                active ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                active
+                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-100"
+                  : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
               }">
               <span>${escapeHtml(st)}</span>
-              <span class="font-mono tabular-nums text-[11px] text-slate-400">${counts[st]}</span>
+              <span class="font-mono tabular-nums text-[11px] text-slate-400 dark:text-slate-500">${counts[st]}</span>
             </button>`;
           }).join("");
 
@@ -1699,7 +1769,9 @@
               const active = state.urgencyFilter === lvl;
               return `<button type="button" data-action="urgency-filter" data-value="${lvl}"
                 class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  active ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                  active
+                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-100"
+                    : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
                 }">${lvl}</button>`;
             })
             .join("");
@@ -1714,11 +1786,11 @@
             if (hasSecondaryFilters) {
               listHtml = `
                 <div class="py-12 px-6 text-center">
-                  <p class="text-sm font-medium text-slate-800">
+                  <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
                     Nenhuma demanda corresponde aos filtros selecionados
                   </p>
                   <button type="button" data-action="clear-filters"
-                    class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 hover:underline cursor-pointer">
+                    class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer">
                     Limpar filtros
                   </button>
                 </div>
@@ -1726,11 +1798,11 @@
             } else if (state.statusFilter === "Concluído") {
               listHtml = `
                 <div class="py-12 px-6 text-center">
-                  <p class="text-sm font-medium text-slate-800">
+                  <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
                     Nenhuma demanda concluída no momento
                   </p>
                   <button type="button" data-action="status-filter" data-value="Todos"
-                    class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 hover:underline cursor-pointer">
+                    class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer">
                     Ver demandas ativas
                   </button>
                 </div>
@@ -1738,13 +1810,13 @@
             } else if (state.statusFilter === "Todos") {
               listHtml = `
                 <div class="py-12 px-6 text-center">
-                  <p class="text-sm font-medium text-slate-800">
+                  <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
                     Nenhuma demanda ativa no momento
                   </p>
                   ${
                     counts["Concluído"] > 0
                       ? `<button type="button" data-action="status-filter" data-value="Concluído"
-                          class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 hover:underline cursor-pointer">
+                          class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer">
                           Ver concluídos (${counts["Concluído"]})
                         </button>`
                       : ""
@@ -1754,11 +1826,11 @@
             } else {
               listHtml = `
                 <div class="py-12 px-6 text-center">
-                  <p class="text-sm font-medium text-slate-800">
+                  <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
                     Nenhuma demanda com status &ldquo;${escapeHtml(state.statusFilter)}&rdquo;
                   </p>
                   <button type="button" data-action="status-filter" data-value="Todos"
-                    class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 hover:underline cursor-pointer">
+                    class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer">
                     Ver todas as demandas ativas
                   </button>
                 </div>
@@ -1766,7 +1838,7 @@
             }
           } else {
             const viewedSet = new Set(state.viewedIds);
-            listHtml = `<div class="divide-y divide-slate-200">
+            listHtml = `<div class="divide-y divide-slate-200 dark:divide-slate-800">
               ${filtered
                 .map((task) => {
                   const currentStatus = task.status ?? (task.completed ? "Concluído" : "A Fazer");
@@ -1790,7 +1862,7 @@
                   const newDemandBanner =
                     isNewDemand && !task.hasNewMessage
                       ? `<div class="mb-2.5 flex flex-wrap items-center justify-between gap-2">
-                          <span class="inline-flex items-center gap-2 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md">
+                          <span class="inline-flex items-center gap-2 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950/60 dark:border-emerald-800/70 rounded-md">
                             <span class="relative flex h-2 w-2 shrink-0" aria-hidden="true">
                               <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                               <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
@@ -1798,7 +1870,7 @@
                             <span>Novo</span>
                           </span>
                           <button type="button" data-action="mark-viewed" data-id="${escapeHtml(task.id)}"
-                            class="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-900 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
+                            class="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-900 dark:text-emerald-400 dark:hover:text-emerald-300 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
                             <i data-lucide="check" class="w-3.5 h-3.5"></i>
                             <span>Marcar como visto</span>
                           </button>
@@ -1806,13 +1878,13 @@
                       : "";
 
                   const newMessageBanner = task.hasNewMessage
-                    ? `<div class="mb-2.5 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg flex flex-wrap items-center justify-between gap-2">
-                        <span class="inline-flex items-center gap-2 text-xs font-semibold text-blue-800">
-                          <i data-lucide="bell-ring" class="w-3.5 h-3.5 text-blue-700 shrink-0"></i>
+                    ? `<div class="mb-2.5 px-3 py-1.5 bg-blue-50 border border-blue-200 dark:bg-blue-950/50 dark:border-blue-800/70 rounded-lg flex flex-wrap items-center justify-between gap-2">
+                        <span class="inline-flex items-center gap-2 text-xs font-semibold text-blue-800 dark:text-blue-200">
+                          <i data-lucide="bell-ring" class="w-3.5 h-3.5 text-blue-700 dark:text-blue-400 shrink-0"></i>
                           <span>Nova mensagem na conversa</span>
                           ${
                             isNewDemand
-                              ? `<span class="inline-flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded">
+                              ? `<span class="inline-flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950/60 dark:border-emerald-800/70 rounded">
                                   <span class="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true"></span>
                                   <span>Novo</span>
                                 </span>`
@@ -1820,7 +1892,7 @@
                           }
                         </span>
                         <button type="button" data-action="mark-seen" data-id="${escapeHtml(task.id)}"
-                          class="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
+                          class="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
                           <i data-lucide="check" class="w-3.5 h-3.5"></i>
                           <span>Marcar como visto</span>
                         </button>
@@ -1828,13 +1900,13 @@
                     : "";
 
                   const savedFeedbackKind = state.savedNoteFeedback[task.id];
-                  const savedFeedbackHtml = `<span role="status" class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700"><i data-lucide="check" class="w-3 h-3"></i><span>Salvo</span></span>`;
+                  const savedFeedbackHtml = `<span role="status" class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400"><i data-lucide="check" class="w-3 h-3"></i><span>Salvo</span></span>`;
 
                   const waitingFieldHtml =
                     currentStatus === "Aguardando"
                       ? `<div class="pt-0.5 max-w-xl">
                           <div class="flex items-center justify-between gap-2 mb-1">
-                            <label for="waiting-note-${escapeHtml(task.id)}" class="flex items-center gap-1.5 text-xs font-medium text-amber-800">
+                            <label for="waiting-note-${escapeHtml(task.id)}" class="flex items-center gap-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
                               <i data-lucide="message-square-text" class="w-3.5 h-3.5 shrink-0"></i>
                               <span>Motivo / pendência em aguardo</span>
                             </label>
@@ -1845,17 +1917,17 @@
                               data-role="waiting-note" data-id="${escapeHtml(task.id)}"
                               value="${escapeHtml(task.statusNote || "")}"
                               placeholder="Aguardando retorno de... (ex: aprovação do jurídico)"
-                              class="flex-1 min-w-0 px-3 py-1.5 text-xs text-slate-900 bg-amber-50/60 border border-amber-200 rounded-lg placeholder:text-amber-700/60 focus:outline-none focus:bg-white focus:ring-2 focus:ring-amber-500/25 focus:border-amber-400" />
+                              class="flex-1 min-w-0 px-3 py-1.5 text-xs text-slate-900 bg-amber-50/60 border border-amber-200 placeholder:text-amber-700/60 focus:outline-none focus:bg-white focus:ring-2 focus:ring-amber-500/25 focus:border-amber-400 dark:text-slate-100 dark:bg-amber-950/35 dark:border-amber-800/70 dark:placeholder:text-amber-300/60 dark:focus:bg-slate-950 dark:focus:border-amber-500 rounded-lg" />
                             <button type="button" data-action="save-waiting-note" data-waiting-action="save" data-id="${escapeHtml(task.id)}"
-                              class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-amber-700 rounded-lg hover:bg-amber-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                              class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-amber-700 dark:bg-amber-600 rounded-lg hover:bg-amber-800 dark:hover:bg-amber-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                               <i data-lucide="check" class="w-3.5 h-3.5"></i>
                               <span>Salvar motivo</span>
                             </button>
                           </div>
                         </div>`
                       : task.statusNote
-                      ? `<div class="flex items-center gap-1.5 text-xs text-slate-500">
-                          <i data-lucide="message-square-text" class="w-3.5 h-3.5 text-slate-400 shrink-0"></i>
+                      ? `<div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                          <i data-lucide="message-square-text" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0"></i>
                           <span>Pendência registrada: ${escapeHtml(task.statusNote)}</span>
                         </div>`
                       : "";
@@ -1864,8 +1936,8 @@
                   if (isEditingObs) {
                     obsHtml = `
                       <div class="space-y-1.5">
-                        <label for="obs-input-${escapeHtml(task.id)}" class="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-                          <i data-lucide="notebook-pen" class="w-3.5 h-3.5 text-blue-700 shrink-0"></i>
+                        <label for="obs-input-${escapeHtml(task.id)}" class="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-300">
+                          <i data-lucide="notebook-pen" class="w-3.5 h-3.5 text-blue-700 dark:text-blue-400 shrink-0"></i>
                           <span>Observações e acompanhamento</span>
                         </label>
                         <div class="flex items-center gap-2">
@@ -1873,15 +1945,15 @@
                             data-role="obs-input" data-id="${escapeHtml(task.id)}"
                             value="${escapeHtml(state.obsDraft)}"
                             placeholder="Ex: Alinhado com Carlos em 17/11; aguardando versão final..."
-                            class="flex-1 min-w-0 px-3 py-1.5 text-xs text-slate-900 bg-white border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                            class="flex-1 min-w-0 px-3 py-1.5 text-xs text-slate-900 bg-white border border-blue-300 dark:text-slate-100 dark:bg-slate-950 dark:border-blue-600 dark:placeholder:text-slate-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
                           <button type="button" data-action="save-obs" data-id="${escapeHtml(task.id)}"
-                            class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                            class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                             <i data-lucide="check" class="w-3.5 h-3.5"></i>
                             <span>Salvar</span>
                           </button>
                           <button type="button" data-action="cancel-obs" data-obs-action="cancel"
                             aria-label="Cancelar edição da observação"
-                            class="p-1.5 text-slate-500 hover:text-slate-800 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-colors cursor-pointer">
+                            class="p-1.5 text-slate-500 hover:text-slate-800 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 dark:text-slate-400 dark:hover:text-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 transition-colors cursor-pointer">
                             <i data-lucide="x" class="w-3.5 h-3.5"></i>
                           </button>
                         </div>
@@ -1889,16 +1961,16 @@
                     `;
                   } else if (task.observacoes) {
                     obsHtml = `
-                      <div class="flex items-start gap-2 px-3 py-2 bg-slate-50 border border-slate-200/80 rounded-lg text-xs text-slate-700">
-                        <i data-lucide="notebook-pen" class="w-3.5 h-3.5 text-slate-500 mt-0.5 shrink-0"></i>
+                      <div class="flex items-start gap-2 px-3 py-2 bg-slate-50 border border-slate-200/80 dark:bg-slate-800/70 dark:border-slate-700/80 rounded-lg text-xs text-slate-700 dark:text-slate-300">
+                        <i data-lucide="notebook-pen" class="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 mt-0.5 shrink-0"></i>
                         <div class="min-w-0 flex-1 leading-relaxed">
-                          <span class="font-medium text-slate-800">Observações: </span>
+                          <span class="font-medium text-slate-800 dark:text-slate-100">Observações: </span>
                           <span>${escapeHtml(task.observacoes)}</span>
                         </div>
                         <div class="flex items-center gap-2 shrink-0">
                           ${savedFeedbackKind === "obs" ? savedFeedbackHtml : ""}
                           <button type="button" data-action="edit-obs" data-id="${escapeHtml(task.id)}"
-                            class="text-xs font-medium text-blue-700 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
+                            class="text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
                             Editar nota
                           </button>
                         </div>
@@ -1908,7 +1980,7 @@
                     obsHtml = `
                       <div class="flex items-center gap-3">
                         <button type="button" data-action="edit-obs" data-id="${escapeHtml(task.id)}"
-                          class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-blue-700 transition-colors cursor-pointer">
+                          class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-blue-700 dark:text-slate-400 dark:hover:text-blue-400 transition-colors cursor-pointer">
                           <i data-lucide="notebook-pen" class="w-3.5 h-3.5"></i>
                           <span>Adicionar observação</span>
                         </button>
@@ -1921,8 +1993,8 @@
                     historyList.length > 0
                       ? `<span aria-hidden="true">·</span>
                          <button type="button" data-action="toggle-thread" data-id="${escapeHtml(task.id)}"
-                           class="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-blue-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                           <i data-lucide="messages-square" class="w-3.5 h-3.5 text-slate-400"></i>
+                           class="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-blue-700 dark:text-slate-300 dark:hover:text-blue-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                           <i data-lucide="messages-square" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500"></i>
                            <span class="tabular-nums">${historyList.length} ${
                              historyList.length === 1 ? "mensagem na conversa" : "mensagens na conversa"
                            }</span>
@@ -1932,27 +2004,27 @@
 
                   const threadDrawerHtml =
                     isExpanded && historyList.length > 0
-                      ? `<div class="mt-2 border border-slate-200 rounded-lg bg-slate-50/70 divide-y divide-slate-200/80 max-w-3xl">
+                      ? `<div class="mt-2 border border-slate-200 rounded-lg bg-slate-50/70 divide-y divide-slate-200/80 dark:border-slate-700 dark:bg-slate-800/50 dark:divide-slate-700/80 max-w-3xl">
                           ${historyList
                             .map(
                               (msg, idx) => `
                             <div class="px-3.5 py-2.5 text-xs space-y-1">
                               <div class="flex flex-wrap items-center justify-between gap-2">
-                                <span class="font-medium text-slate-800">
-                                  <span class="font-mono tabular-nums text-slate-400 mr-1.5 font-normal">${String(
+                                <span class="font-medium text-slate-800 dark:text-slate-200">
+                                  <span class="font-mono tabular-nums text-slate-400 dark:text-slate-500 mr-1.5 font-normal">${String(
                                     idx + 1
                                   ).padStart(2, "0")}.</span>
                                   ${escapeHtml(msg.remetente_nome)}${
                                     msg.remetente_email ? ` (${escapeHtml(msg.remetente_email)})` : ""
                                   }
                                 </span>
-                                <span class="font-mono tabular-nums text-slate-500">
+                                <span class="font-mono tabular-nums text-slate-500 dark:text-slate-400">
                                   ${escapeHtml(
                                     formatReceivedDateTime(msg.data_hora, undefined, "Sem data")
                                   )}
                                 </span>
                               </div>
-                              <p class="text-slate-600 leading-relaxed pl-6">${escapeHtml(msg.resumo)}</p>
+                              <p class="text-slate-600 dark:text-slate-300 leading-relaxed pl-6">${escapeHtml(msg.resumo)}</p>
                             </div>
                           `
                             )
@@ -1970,18 +2042,18 @@
                   const taskLabels = getTaskLabels(task);
                   const taskCategories = getTaskCategories(task);
                   const cardSurfaceClass = task.hasNewMessage
-                    ? "border-l-4 border-l-blue-600 bg-blue-50/35"
+                    ? "border-l-4 border-l-blue-600 bg-blue-50/35 dark:border-l-blue-500 dark:bg-blue-950/20"
                     : isNewDemand
-                    ? "border-l-4 border-l-emerald-500 bg-emerald-50/20"
+                    ? "border-l-4 border-l-emerald-500 bg-emerald-50/20 dark:border-l-emerald-500 dark:bg-emerald-950/15"
                     : isCompleted
-                    ? "bg-slate-50/40"
+                    ? "bg-slate-50/40 dark:bg-slate-900/50"
                     : "";
 
                   const expandedDetailsHtml = isCardExpanded
                     ? `<div class="pt-2 space-y-2.5 animate-card-details">
                         ${
                           task.descricao
-                            ? `<p class="text-xs text-slate-600 leading-relaxed max-w-3xl whitespace-pre-line">${escapeHtml(
+                            ? `<p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed max-w-3xl whitespace-pre-line">${escapeHtml(
                                 task.descricao
                               )}</p>`
                             : ""
@@ -1992,7 +2064,7 @@
                     : "";
 
                   return `
-                    <article class="p-4 sm:px-6 transition-colors hover:bg-slate-50/60 ${cardSurfaceClass}">
+                    <article class="p-4 sm:px-6 transition-colors hover:bg-slate-50/60 dark:hover:bg-slate-800/40 ${cardSurfaceClass}">
                       ${newDemandBanner}
                       ${newMessageBanner}
                       <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
@@ -2000,7 +2072,7 @@
                           <div class="flex flex-wrap items-center gap-2">
                             ${renderStatusBadge(currentStatus)}
                             ${renderUrgencyIndicator(task.urgencia)}
-                            <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
+                            <span aria-hidden="true" class="text-slate-300 dark:text-slate-600 text-xs">·</span>
                             ${renderCheckboxPopover({
                               scope: "card",
                               taskId: task.id,
@@ -2009,7 +2081,7 @@
                               options: availableLabels,
                               isOpen: isLabelPickerOpen,
                             })}
-                            <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
+                            <span aria-hidden="true" class="text-slate-300 dark:text-slate-600 text-xs">·</span>
                             ${renderCheckboxPopover({
                               scope: "card",
                               taskId: task.id,
@@ -2018,30 +2090,34 @@
                               options: availableCategories,
                               isOpen: isCategoryPickerOpen,
                             })}
-                            <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
+                            <span aria-hidden="true" class="text-slate-300 dark:text-slate-600 text-xs">·</span>
                             ${renderDeadlineBadge(task.prazo, isCompleted)}
                           </div>
 
                           <div>
                             <button type="button" data-action="toggle-card" data-id="${escapeHtml(task.id)}"
                               aria-expanded="${isCardExpanded ? "true" : "false"}"
-                              class="group w-full flex items-start justify-between gap-2 text-left rounded-md -mx-1.5 px-1.5 py-0.5 hover:bg-slate-100/75 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/25 transition-colors cursor-pointer">
+                              class="group w-full flex items-start justify-between gap-2 text-left rounded-md -mx-1.5 px-1.5 py-0.5 hover:bg-slate-100/75 dark:hover:bg-slate-800/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/25 transition-colors cursor-pointer">
                               <h3 class="text-sm font-semibold leading-snug transition-colors ${
-                                isCompleted ? "line-through text-slate-500" : "text-slate-900 group-hover:text-blue-800"
+                                isCompleted
+                                  ? "line-through text-slate-500 dark:text-slate-500"
+                                  : "text-slate-900 group-hover:text-blue-800 dark:text-slate-100 dark:group-hover:text-blue-300"
                               }">${escapeHtml(task.titulo)}</h3>
                               <i data-lucide="chevron-down" class="w-4 h-4 shrink-0 mt-0.5 transition-transform duration-200 ${
-                                isCardExpanded ? "rotate-180 text-blue-700" : "text-slate-400 group-hover:text-slate-600"
+                                isCardExpanded
+                                  ? "rotate-180 text-blue-700 dark:text-blue-400"
+                                  : "text-slate-400 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300"
                               }"></i>
                             </button>
                             ${expandedDetailsHtml}
                           </div>
 
                           <div class="space-y-1 pt-0.5">
-                            <div class="text-xs text-slate-500 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                            <div class="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-2.5 gap-y-1">
                               <span>Solicitante: ${escapeHtml(task.solicitante_nome)}</span>
                               <span aria-hidden="true">·</span>
-                              <span class="inline-flex items-center gap-1 font-mono tabular-nums text-slate-600">
-                                <i data-lucide="clock" class="w-3 h-3 text-slate-400"></i>
+                              <span class="inline-flex items-center gap-1 font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                                <i data-lucide="clock" class="w-3 h-3 text-slate-400 dark:text-slate-500"></i>
                                 <span>Recebido em ${escapeHtml(
                                   formatReceivedDateTime(
                                     task.data_hora_email_original,
@@ -2053,10 +2129,10 @@
                               ${threadAccordionBtn}
                             </div>
 
-                            <div class="text-xs text-slate-600 flex items-start gap-1.5 min-w-0">
-                              <i data-lucide="mail" class="w-3 h-3 text-slate-400 shrink-0 mt-0.5"></i>
+                            <div class="text-xs text-slate-600 dark:text-slate-300 flex items-start gap-1.5 min-w-0">
+                              <i data-lucide="mail" class="w-3 h-3 text-slate-400 dark:text-slate-500 shrink-0 mt-0.5"></i>
                               <p class="min-w-0 break-words leading-snug">
-                                <span class="font-medium text-slate-700">Assunto: </span>
+                                <span class="font-medium text-slate-700 dark:text-slate-200">Assunto: </span>
                                 <span>${escapeHtml(
                                   task.assunto_normalizado || task.assunto_original || "Sem assunto"
                                 )}</span>
@@ -2070,17 +2146,17 @@
                         <div class="flex flex-wrap items-center gap-2 shrink-0">
                           <select data-role="task-status-select" data-id="${escapeHtml(task.id)}"
                             aria-label="Alterar status de ${escapeHtml(task.titulo)}"
-                            class="px-2.5 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-200 rounded-lg hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 cursor-pointer">
+                            class="px-2.5 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-200 hover:border-slate-300 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500 cursor-pointer">
                             ${statusOptionsHtml}
                           </select>
                           <button type="button" data-action="open-edit-modal" data-id="${escapeHtml(task.id)}"
-                            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                             <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                             <span>Editar</span>
                           </button>
                           <button type="button" data-action="request-delete-task" data-id="${escapeHtml(task.id)}"
                             title="Excluir demanda definitivamente" aria-label="Excluir ${escapeHtml(task.titulo)}"
-                            class="p-1.5 text-slate-400 hover:text-red-700 rounded-lg hover:bg-red-50 transition-colors cursor-pointer">
+                            class="p-1.5 text-slate-400 hover:text-red-700 rounded-lg hover:bg-red-50 dark:text-slate-500 dark:hover:text-red-400 dark:hover:bg-red-950/50 transition-colors cursor-pointer">
                             <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                           </button>
                         </div>
@@ -2093,23 +2169,23 @@
           }
 
           return `
-            <section class="bg-white border border-slate-200 rounded-xl flex flex-col">
-              <div class="px-6 py-4 border-b border-slate-200 flex flex-col gap-3">
+            <section class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-xl flex flex-col">
+              <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-col gap-3">
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <div role="tablist" aria-label="Filtrar demandas por status"
-                    class="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                    class="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-lg">
                     ${statusTabsHtml}
                   </div>
                   <div class="flex flex-wrap items-center gap-2">
                     <button type="button" data-action="open-create-modal"
-                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                       <i data-lucide="plus" class="w-3.5 h-3.5"></i>
                       <span>Nova demanda</span>
                     </button>
                     <button type="button" data-action="export-csv" ${
                       filtered.length === 0 ? "disabled" : ""
                     }
-                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                       <i data-lucide="download" class="w-3.5 h-3.5"></i>
                       <span>Exportar CSV</span>
                     </button>
@@ -2119,16 +2195,16 @@
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <div class="flex flex-wrap items-center gap-2.5 flex-1 min-w-[240px]">
                     <div class="relative flex-1 min-w-[220px] max-w-md">
-                      <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+                      <i data-lucide="search" class="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
                       <input type="search" id="task-search-input" value="${escapeHtml(state.search)}"
                         placeholder="Buscar demanda, rótulo, observação ou histórico..."
-                        class="w-full pl-9 pr-3 py-1.5 text-sm text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                        class="w-full pl-9 pr-3 py-1.5 text-sm text-slate-900 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
                     </div>
                     <div class="relative flex items-center">
-                      <i data-lucide="tag" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none"></i>
+                      <i data-lucide="tag" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
                       <label for="filter-rotulo-select" class="sr-only">Filtrar por rótulo</label>
                       <select id="filter-rotulo-select" data-role="label-filter"
-                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-white focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 cursor-pointer">
+                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
                         <option value="Todos" ${activeLabelFilter === "Todos" ? "selected" : ""}>Todos os rótulos</option>
                         ${availableLabels
                           .map(
@@ -2141,10 +2217,10 @@
                       </select>
                     </div>
                     <div class="relative flex items-center">
-                      <i data-lucide="folder" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none"></i>
+                      <i data-lucide="folder" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
                       <label for="filter-categoria-select" class="sr-only">Filtrar por categoria</label>
                       <select id="filter-categoria-select" data-role="category-filter"
-                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-white focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 cursor-pointer">
+                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
                         <option value="Todas" ${activeCategoryFilter === "Todas" ? "selected" : ""}>Todas as categorias</option>
                         ${availableCategories
                           .map(
@@ -2157,10 +2233,10 @@
                       </select>
                     </div>
                     <div class="relative flex items-center">
-                      <i data-lucide="arrow-up-down" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none"></i>
+                      <i data-lucide="arrow-up-down" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
                       <label for="queue-sort-select" class="sr-only">Ordenar fila de demandas</label>
                       <select id="queue-sort-select" data-role="queue-sort"
-                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-white focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 cursor-pointer">
+                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
                         ${SORT_OPTIONS.map(
                           (opt) =>
                             `<option value="${opt.value}" ${
@@ -2170,7 +2246,7 @@
                       </select>
                     </div>
                   </div>
-                  <div class="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                  <div class="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-lg">
                     ${urgencyTabsHtml}
                   </div>
                 </div>
@@ -2204,13 +2280,13 @@
 
           const rulesBody =
             state.rules.length === 0
-              ? `<div class="p-10 text-center text-sm text-slate-500">
+              ? `<div class="p-10 text-center text-sm text-slate-500 dark:text-slate-400">
                   Nenhuma regra configurada. O backend utilizará o rótulo padrão "Geral" e escolherá uma categoria da lista disponível.
                 </div>`
               : `<div class="overflow-x-auto">
                   <table class="w-full text-left border-collapse">
                     <thead>
-                      <tr class="border-b border-slate-200 text-xs font-medium text-slate-500 bg-slate-50/70">
+                      <tr class="border-b border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-800/60">
                         <th class="py-2.5 pl-6 pr-3">Estado</th>
                         <th class="py-2.5 px-3">Critério</th>
                         <th class="py-2.5 px-3">Correspondência</th>
@@ -2219,18 +2295,18 @@
                         <th class="py-2.5 pl-3 pr-6 text-right">Ações</th>
                       </tr>
                     </thead>
-                    <tbody class="divide-y divide-slate-100 text-sm">
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
                       ${state.rules
                         .map((rule) => {
                           if (state.editingRuleId === rule.id && state.editRuleDraft) {
                             const d = state.editRuleDraft;
                             return `
-                              <tr class="bg-blue-50/40 align-top">
-                                <td class="py-2.5 pl-6 pr-3 text-xs text-slate-600 whitespace-nowrap">${
+                              <tr class="bg-blue-50/40 dark:bg-blue-950/30 align-top">
+                                <td class="py-2.5 pl-6 pr-3 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">${
                                   d.ativo ? "Ativa" : "Pausada"
                                 }</td>
                                 <td class="py-2.5 px-3">
-                                  <select data-role="edit-rule-matchType" class="px-2 py-1 text-xs bg-white border border-slate-300 rounded-md">
+                                  <select data-role="edit-rule-matchType" class="px-2 py-1 text-xs text-slate-900 bg-white border border-slate-300 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 rounded-md">
                                     ${Object.keys(MATCH_TYPE_LABELS)
                                       .map(
                                         (k) =>
@@ -2244,7 +2320,7 @@
                                 <td class="py-2.5 px-3">
                                   <input type="text" data-role="edit-rule-matchValue" value="${escapeHtml(
                                     d.matchValue
-                                  )}" class="w-full min-w-[140px] px-2 py-1 font-mono text-xs bg-white border border-slate-300 rounded-md" />
+                                  )}" class="w-full min-w-[140px] px-2 py-1 font-mono text-xs text-slate-900 bg-white border border-slate-300 dark:text-slate-100 dark:bg-slate-950 dark:border-slate-700 rounded-md" />
                                 </td>
                                 <td class="py-2.5 px-3 min-w-[200px]">
                                   ${renderMultiTagInput({
@@ -2275,10 +2351,10 @@
                                   <div class="inline-flex items-center gap-1">
                                     <button type="button" data-action="save-rule-edit" data-id="${escapeHtml(
                                       rule.id
-                                    )}" aria-label="Salvar regra" class="p-1.5 text-emerald-700 hover:bg-emerald-50 rounded-md cursor-pointer">
+                                    )}" aria-label="Salvar regra" class="p-1.5 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/60 rounded-md cursor-pointer">
                                       <i data-lucide="check" class="w-3.5 h-3.5"></i>
                                     </button>
-                                    <button type="button" data-action="cancel-rule-edit" aria-label="Cancelar edição" class="p-1.5 text-slate-500 hover:bg-slate-100 rounded-md cursor-pointer">
+                                    <button type="button" data-action="cancel-rule-edit" aria-label="Cancelar edição" class="p-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 rounded-md cursor-pointer">
                                       <i data-lucide="x" class="w-3.5 h-3.5"></i>
                                     </button>
                                   </div>
@@ -2291,23 +2367,23 @@
                           const ruleCategories = parseMultiValueField(rule.categoria, "Outro");
 
                           return `
-                            <tr class="hover:bg-slate-50/80 transition-colors ${
+                            <tr class="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors ${
                               rule.ativo ? "" : "opacity-55"
                             }">
                               <td class="py-3 pl-6 pr-3 whitespace-nowrap">
                                 <button type="button" data-action="toggle-rule" data-id="${escapeHtml(
                                   rule.id
                                 )}" class="inline-flex items-center gap-1.5 text-xs font-medium cursor-pointer ${
-                                  rule.ativo ? "text-emerald-700" : "text-slate-500"
+                                  rule.ativo ? "text-emerald-700 dark:text-emerald-400" : "text-slate-500 dark:text-slate-400"
                                 }">
                                   <i data-lucide="power" class="w-3.5 h-3.5"></i>
                                   <span>${rule.ativo ? "Ativa" : "Pausada"}</span>
                                 </button>
                               </td>
-                              <td class="py-3 px-3 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(
+                              <td class="py-3 px-3 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">${escapeHtml(
                                 MATCH_TYPE_LABELS[rule.matchType] || rule.matchType
                               )}</td>
-                              <td class="py-3 px-3 font-mono text-xs text-slate-900">${escapeHtml(
+                              <td class="py-3 px-3 font-mono text-xs text-slate-900 dark:text-slate-100">${escapeHtml(
                                 rule.matchValue
                               )}</td>
                               <td class="py-3 px-3">
@@ -2330,7 +2406,7 @@
                                   ${ruleCategories
                                     .map(
                                       (cat) =>
-                                        `<span class="inline-flex items-center px-2 py-0.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-md whitespace-nowrap">${escapeHtml(
+                                        `<span class="inline-flex items-center px-2 py-0.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 rounded-md whitespace-nowrap">${escapeHtml(
                                           cat
                                         )}</span>`
                                     )
@@ -2343,14 +2419,14 @@
                                     rule.id
                                   )}" aria-label="Editar regra ${escapeHtml(
                                     rule.rotulo
-                                  )}" class="p-1.5 text-slate-400 hover:text-blue-700 rounded-md hover:bg-slate-100 transition-colors cursor-pointer">
+                                  )}" class="p-1.5 text-slate-400 hover:text-blue-700 rounded-md hover:bg-slate-100 dark:text-slate-500 dark:hover:text-blue-400 dark:hover:bg-slate-800 transition-colors cursor-pointer">
                                     <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                                   </button>
                                   <button type="button" data-action="delete-rule" data-id="${escapeHtml(
                                     rule.id
                                   )}" aria-label="Remover regra ${escapeHtml(
                                     rule.rotulo
-                                  )}" class="p-1.5 text-slate-400 hover:text-red-700 rounded-md hover:bg-red-50 transition-colors cursor-pointer">
+                                  )}" class="p-1.5 text-slate-400 hover:text-red-700 rounded-md hover:bg-red-50 dark:text-slate-500 dark:hover:text-red-400 dark:hover:bg-red-950/50 transition-colors cursor-pointer">
                                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                                   </button>
                                 </div>
@@ -2372,21 +2448,21 @@
 
               if (isEditingThis) {
                 return `
-                  <div class="px-5 py-2 flex items-center gap-2 bg-blue-50/40">
+                  <div class="px-5 py-2 flex items-center gap-2 bg-blue-50/40 dark:bg-blue-950/30">
                     <input
                       type="text"
                       data-role="label-item-input"
                       data-label="${escapeHtml(lbl)}"
                       value="${escapeHtml(state.labelItemDraft)}"
                       aria-label="Novo nome para rótulo ${escapeHtml(lbl)}"
-                      class="flex-1 min-w-0 px-2.5 py-1 text-xs text-slate-900 bg-white border border-blue-400 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600/20"
+                      class="flex-1 min-w-0 px-2.5 py-1 text-xs text-slate-900 bg-white border border-blue-400 dark:text-slate-100 dark:bg-slate-950 dark:border-blue-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600/20"
                     />
                     <button
                       type="button"
                       data-action="save-label-item"
                       data-label="${escapeHtml(lbl)}"
                       aria-label="Salvar rótulo"
-                      class="p-1 text-emerald-700 hover:bg-emerald-50 rounded-md cursor-pointer shrink-0"
+                      class="p-1 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/60 rounded-md cursor-pointer shrink-0"
                     >
                       <i data-lucide="check" class="w-3.5 h-3.5"></i>
                     </button>
@@ -2395,7 +2471,7 @@
                       data-action="cancel-label-item"
                       data-label-item-action="cancel"
                       aria-label="Cancelar edição do rótulo"
-                      class="p-1 text-slate-500 hover:bg-slate-100 rounded-md cursor-pointer shrink-0"
+                      class="p-1 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 rounded-md cursor-pointer shrink-0"
                     >
                       <i data-lucide="x" class="w-3.5 h-3.5"></i>
                     </button>
@@ -2405,7 +2481,7 @@
 
               const pickerPanelHtml = isPickerOpen
                 ? `
-                  <div class="mt-2.5 p-2.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                  <div class="mt-2.5 p-2.5 bg-slate-50 border border-slate-200 dark:bg-slate-800/70 dark:border-slate-700 rounded-lg space-y-2">
                     <div class="flex flex-wrap items-center gap-1.5">
                       ${LABEL_COLOR_PALETTE.map((preset) => {
                         const isSelected = activeHex === preset.hex.toLowerCase();
@@ -2419,13 +2495,13 @@
                             style="background-color: ${preset.hex};"
                             class="w-5 h-5 rounded-md border transition-transform hover:scale-110 cursor-pointer ${
                               isSelected
-                                ? "ring-2 ring-offset-1 ring-slate-900 border-white"
-                                : "border-black/15"
+                                ? "ring-2 ring-offset-1 ring-slate-900 border-white dark:ring-offset-slate-900 dark:ring-slate-100"
+                                : "border-black/15 dark:border-white/20"
                             }"></button>
                         `;
                       }).join("")}
                       <label title="Escolher cor personalizada"
-                        class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 rounded-md cursor-pointer hover:bg-slate-100">
+                        class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 dark:text-slate-200 dark:bg-slate-900 dark:border-slate-700 dark:hover:bg-slate-700 rounded-md cursor-pointer">
                         <input type="color"
                           data-role="label-custom-color"
                           data-label="${escapeHtml(lbl)}"
@@ -2439,7 +2515,7 @@
                           ? `<button type="button"
                               data-action="reset-label-color"
                               data-label="${escapeHtml(lbl)}"
-                              class="px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-md hover:bg-slate-100 cursor-pointer">
+                              class="px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-slate-100 dark:bg-slate-900 dark:border-slate-700 dark:hover:bg-slate-700 rounded-md cursor-pointer">
                               Neutro
                             </button>`
                           : ""
@@ -2458,7 +2534,7 @@
                         <i data-lucide="tag" class="w-3 h-3 opacity-80 shrink-0"></i>
                         <span class="truncate">${escapeHtml(lbl)}</span>
                       </span>
-                      ${isDefault ? '<span class="text-xs font-normal text-slate-400 shrink-0">(padrão)</span>' : ""}
+                      ${isDefault ? '<span class="text-xs font-normal text-slate-400 dark:text-slate-500 shrink-0">(padrão)</span>' : ""}
                     </div>
                     <div class="inline-flex items-center gap-1 shrink-0">
                       <button
@@ -2469,8 +2545,8 @@
                         title="Personalizar cor do rótulo"
                         class="p-1 rounded-md transition-colors cursor-pointer ${
                           isPickerOpen
-                            ? "text-blue-700 bg-blue-50"
-                            : "text-slate-400 hover:text-blue-700 hover:bg-slate-100"
+                            ? "text-blue-700 bg-blue-50 dark:text-blue-400 dark:bg-blue-950/60"
+                            : "text-slate-400 hover:text-blue-700 hover:bg-slate-100 dark:text-slate-500 dark:hover:text-blue-400 dark:hover:bg-slate-800"
                         }"
                       >
                         <i data-lucide="palette" class="w-3.5 h-3.5"></i>
@@ -2481,7 +2557,7 @@
                         data-label="${escapeHtml(lbl)}"
                         ${isDefault ? "disabled" : ""}
                         aria-label="Editar rótulo ${escapeHtml(lbl)}"
-                        class="p-1 text-slate-400 hover:text-blue-700 disabled:opacity-30 rounded-md hover:bg-slate-100 transition-colors cursor-pointer"
+                        class="p-1 text-slate-400 hover:text-blue-700 disabled:opacity-30 rounded-md hover:bg-slate-100 dark:text-slate-500 dark:hover:text-blue-400 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                       >
                         <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                       </button>
@@ -2491,7 +2567,7 @@
                         data-label="${escapeHtml(lbl)}"
                         ${isDefault || availableLabels.length <= 1 ? "disabled" : ""}
                         aria-label="Remover rótulo ${escapeHtml(lbl)}"
-                        class="p-1 text-slate-400 hover:text-red-700 disabled:opacity-30 rounded-md hover:bg-red-50 transition-colors cursor-pointer"
+                        class="p-1 text-slate-400 hover:text-red-700 disabled:opacity-30 rounded-md hover:bg-red-50 dark:text-slate-500 dark:hover:text-red-400 dark:hover:bg-red-950/50 transition-colors cursor-pointer"
                       >
                         <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                       </button>
@@ -2506,11 +2582,11 @@
           return `
             <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
               ${datalistsHtml}
-              <section class="xl:col-span-8 bg-white border border-slate-200 rounded-xl flex flex-col">
-                <div class="px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              <section class="xl:col-span-8 bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-xl flex flex-col">
+                <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 class="text-base font-semibold text-slate-900">Regras de rotulagem e categoria</h2>
-                    <p class="text-xs text-slate-500 mt-0.5">
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">Regras de rotulagem e categoria</h2>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                       Todas as alterações são salvas automaticamente na Planilha Google para a próxima sincronização do Gmail.
                     </p>
                   </div>
@@ -2518,39 +2594,39 @@
                     ${
                       state.rulesSavedFeedback
                         ? `<span role="status"
-                            class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md whitespace-nowrap">
-                            <i data-lucide="check" class="w-3.5 h-3.5 text-emerald-700"></i>
+                            class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950/60 dark:border-emerald-800/70 rounded-md whitespace-nowrap">
+                            <i data-lucide="check" class="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400"></i>
                             <span>${escapeHtml(state.rulesSavedFeedback)}</span>
                           </span>`
                         : ""
                     }
                     <button type="button" data-action="reset-rules"
-                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                       <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
                       <span>Restaurar padrões</span>
                     </button>
                   </div>
                 </div>
 
-                <form id="create-rule-form" class="p-6 border-b border-slate-200 bg-slate-50/60 space-y-3">
+                <form id="create-rule-form" class="p-6 border-b border-slate-200 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-800/40 space-y-3">
                   <div class="grid grid-cols-1 sm:grid-cols-12 gap-3">
                     <div class="sm:col-span-4">
-                      <label for="rule-match-type" class="block text-xs font-medium text-slate-700 mb-1">Critério</label>
-                      <select id="rule-match-type" class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
+                      <label for="rule-match-type" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Critério</label>
+                      <select id="rule-match-type" class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-900 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500">
                         ${matchOptions}
                       </select>
                     </div>
                     <div class="sm:col-span-8">
-                      <label for="rule-match-value" class="block text-xs font-medium text-slate-700 mb-1">Valor de correspondência</label>
+                      <label for="rule-match-value" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Valor de correspondência</label>
                       <input id="rule-match-value" type="text" value="${escapeHtml(
                         state.ruleFormMatchValue
                       )}" placeholder="@fornecedor.com.br"
-                        class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                        class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-900 dark:border-slate-700 dark:placeholder:text-slate-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
                     </div>
                   </div>
                   <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
                     <div class="sm:col-span-5">
-                      <label for="rule-rotulo-input" class="block text-xs font-medium text-slate-700 mb-1">Rótulos aplicados</label>
+                      <label for="rule-rotulo-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Rótulos aplicados</label>
                       ${renderMultiTagInput({
                         context: "rule-rotulo",
                         tags: state.ruleFormRotulos,
@@ -2564,7 +2640,7 @@
                       })}
                     </div>
                     <div class="sm:col-span-5">
-                      <label for="rule-categoria-input" class="block text-xs font-medium text-slate-700 mb-1">Categorias</label>
+                      <label for="rule-categoria-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Categorias</label>
                       ${renderMultiTagInput({
                         context: "rule-categoria",
                         tags: state.ruleFormCategorias,
@@ -2580,7 +2656,7 @@
                     </div>
                     <div class="sm:col-span-2 flex justify-end">
                       <button type="submit"
-                        class="w-full inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                        class="w-full inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                         <i data-lucide="plus" class="w-3.5 h-3.5"></i>
                         <span>Adicionar</span>
                       </button>
@@ -2592,62 +2668,62 @@
               </section>
 
               <div class="xl:col-span-4 space-y-6">
-                <section class="bg-white border border-slate-200 rounded-xl flex flex-col">
-                  <div class="px-6 py-4 border-b border-slate-200">
-                    <h2 class="text-base font-semibold text-slate-900">Rótulos</h2>
-                    <p class="text-xs text-slate-500 mt-0.5">
+                <section class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-xl flex flex-col">
+                  <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">Rótulos</h2>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                       Rótulos e cores personalizadas exibidas na fila de demandas, regras e filtros.
                     </p>
                   </div>
 
-                  <form id="create-label-form" class="p-5 border-b border-slate-100 flex items-center gap-2">
+                  <form id="create-label-form" class="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
                     <input id="new-label-input" type="text" value="${escapeHtml(
                       state.newLabelInput
                     )}" placeholder="Novo rótulo..."
-                      class="flex-1 min-w-0 px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                      class="flex-1 min-w-0 px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
                     <button type="submit"
-                      class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                       <i data-lucide="plus" class="w-3.5 h-3.5"></i>
                       <span>Incluir</span>
                     </button>
                   </form>
 
-                  <div class="divide-y divide-slate-100">
+                  <div class="divide-y divide-slate-100 dark:divide-slate-800">
                     ${labelsListHtml}
                   </div>
                 </section>
 
-                <section class="bg-white border border-slate-200 rounded-xl flex flex-col">
-                  <div class="px-6 py-4 border-b border-slate-200">
-                    <h2 class="text-base font-semibold text-slate-900">Categorias disponíveis</h2>
-                    <p class="text-xs text-slate-500 mt-0.5">
+                <section class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-xl flex flex-col">
+                  <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800">
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">Categorias disponíveis</h2>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                       Opções disponíveis para seleção nas regras e na edição manual das demandas.
                     </p>
                   </div>
 
-                  <form id="create-category-form" class="p-5 border-b border-slate-100 flex items-center gap-2">
+                  <form id="create-category-form" class="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
                     <input id="new-category-input" type="text" value="${escapeHtml(
                       state.newCategoryInput
                     )}" placeholder="Nova categoria..."
-                      class="flex-1 min-w-0 px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                      class="flex-1 min-w-0 px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
                     <button type="submit"
-                      class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      class="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                       <i data-lucide="plus" class="w-3.5 h-3.5"></i>
                       <span>Incluir</span>
                     </button>
                   </form>
 
-                  <div class="divide-y divide-slate-100">
+                  <div class="divide-y divide-slate-100 dark:divide-slate-800">
                     ${state.categories
                       .map(
                         (cat) => `
                       <div class="px-5 py-2.5 flex items-center justify-between gap-3 text-sm">
-                        <span class="text-slate-800 font-medium">${escapeHtml(cat)}</span>
+                        <span class="text-slate-800 dark:text-slate-200 font-medium">${escapeHtml(cat)}</span>
                         <button type="button" data-action="delete-category" data-category="${escapeHtml(
                           cat
                         )}" ${state.categories.length <= 1 ? "disabled" : ""}
                           aria-label="Remover categoria ${escapeHtml(cat)}"
-                          class="p-1 text-slate-400 hover:text-red-700 disabled:opacity-30 rounded-md hover:bg-red-50 transition-colors cursor-pointer">
+                          class="p-1 text-slate-400 hover:text-red-700 disabled:opacity-30 rounded-md hover:bg-red-50 dark:text-slate-500 dark:hover:text-red-400 dark:hover:bg-red-950/50 transition-colors cursor-pointer">
                           <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                         </button>
                       </div>
@@ -2693,28 +2769,28 @@
           const historyList = task.historico_mensagens || [];
           const historyHtml =
             historyList.length > 0
-              ? `<div class="border border-slate-200 rounded-lg overflow-hidden">
+              ? `<div class="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
                   <button type="button" data-action="toggle-modal-history"
-                    class="w-full px-3.5 py-2.5 bg-slate-50 flex items-center justify-between text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer">
+                    class="w-full px-3.5 py-2.5 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/70 dark:hover:bg-slate-800 flex items-center justify-between text-xs font-medium text-slate-700 dark:text-slate-200 transition-colors cursor-pointer">
                     <span class="inline-flex items-center gap-1.5">
-                      <i data-lucide="messages-square" class="w-3.5 h-3.5 text-slate-500"></i>
+                      <i data-lucide="messages-square" class="w-3.5 h-3.5 text-slate-500 dark:text-slate-400"></i>
                       <span class="tabular-nums">Histórico da conversa (${historyList.length} ${
                         historyList.length === 1 ? "mensagem" : "mensagens"
                       })</span>
                     </span>
                     <i data-lucide="${
                       state.modalShowHistory ? "chevron-up" : "chevron-down"
-                    }" class="w-4 h-4 text-slate-500"></i>
+                    }" class="w-4 h-4 text-slate-500 dark:text-slate-400"></i>
                   </button>
                   ${
                     state.modalShowHistory
-                      ? `<div class="max-h-48 overflow-y-auto divide-y divide-slate-100 bg-white">
+                      ? `<div class="max-h-48 overflow-y-auto divide-y divide-slate-100 bg-white dark:divide-slate-800 dark:bg-slate-900">
                           ${historyList
                             .map(
                               (msg) => `
                             <div class="px-3.5 py-2.5 text-xs space-y-1">
-                              <div class="flex flex-wrap items-center justify-between gap-2 text-slate-500">
-                                <span class="font-medium text-slate-800">${escapeHtml(
+                              <div class="flex flex-wrap items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
+                                <span class="font-medium text-slate-800 dark:text-slate-200">${escapeHtml(
                                   msg.remetente_nome
                                 )}${
                                   msg.remetente_email ? ` (${escapeHtml(msg.remetente_email)})` : ""
@@ -2723,7 +2799,7 @@
                                   formatReceivedDateTime(msg.data_hora, undefined, "Sem data")
                                 )}</span>
                               </div>
-                              <p class="text-slate-600 leading-relaxed">${escapeHtml(msg.resumo)}</p>
+                              <p class="text-slate-600 dark:text-slate-300 leading-relaxed">${escapeHtml(msg.resumo)}</p>
                             </div>
                           `
                             )
@@ -2735,73 +2811,73 @@
               : "";
 
           return `
-            <div data-action="modal-backdrop" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40" role="dialog" aria-modal="true">
-              <div class="bg-white border border-slate-200 rounded-xl w-full max-w-2xl shadow-lg overflow-hidden max-h-[92vh] overflow-y-auto">
-                <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4">
+            <div data-action="modal-backdrop" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 dark:bg-black/65" role="dialog" aria-modal="true">
+              <div class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 rounded-xl w-full max-w-2xl shadow-lg dark:shadow-black/50 overflow-hidden max-h-[92vh] overflow-y-auto">
+                <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4">
                   <div>
-                    <h2 class="text-base font-semibold text-slate-900">
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">
                       ${state.modalMode === "create" ? "Nova demanda" : "Editar demanda"}
                     </h2>
-                    <p class="text-xs text-slate-500 mt-0.5 truncate">
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
                       ${escapeHtml(form.solicitante_nome || task.solicitante_nome)} · ${escapeHtml(
                         task.assunto_normalizado || task.assunto_original
                       )}
                     </p>
                   </div>
                   <button type="button" data-action="close-modal" aria-label="Fechar janela"
-                    class="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer">
+                    class="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer">
                     <i data-lucide="x" class="w-4 h-4"></i>
                   </button>
                 </div>
 
                 <form id="modal-task-form" class="p-6 space-y-4">
                   <div>
-                    <label for="modal-titulo" class="block text-xs font-medium text-slate-700 mb-1">Título da tarefa</label>
+                    <label for="modal-titulo" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Título da tarefa</label>
                     <input id="modal-titulo" type="text" required value="${escapeHtml(form.titulo)}"
-                      class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                      class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
                   </div>
 
                   <div>
-                    <label for="modal-descricao" class="block text-xs font-medium text-slate-700 mb-1">Descrição / resumo</label>
+                    <label for="modal-descricao" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Descrição / resumo</label>
                     <textarea id="modal-descricao" rows="3"
-                      class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg resize-y focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">${escapeHtml(
+                      class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 rounded-lg resize-y focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500">${escapeHtml(
                         form.descricao
                       )}</textarea>
                   </div>
 
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label for="modal-solicitante-nome" class="block text-xs font-medium text-slate-700 mb-1">Solicitante (Nome)</label>
+                      <label for="modal-solicitante-nome" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Solicitante (Nome)</label>
                       <input id="modal-solicitante-nome" type="text" value="${escapeHtml(
                         form.solicitante_nome
                       )}" placeholder="Ex: Maria Silva"
-                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
                     </div>
                     <div>
-                      <label for="modal-solicitante-email" class="block text-xs font-medium text-slate-700 mb-1">E-mail do Solicitante</label>
+                      <label for="modal-solicitante-email" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">E-mail do Solicitante</label>
                       <input id="modal-solicitante-email" type="text" inputmode="email" value="${escapeHtml(
                         form.solicitante_email
                       )}" placeholder="Ex: maria@empresa.com.br"
-                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
                     </div>
                   </div>
 
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <div class="flex items-center justify-between mb-1">
-                        <label for="modal-prazo" class="text-xs font-medium text-slate-700">Prazo</label>
-                        <button type="button" data-action="clear-modal-prazo" class="text-xs text-slate-500 hover:text-slate-800 underline cursor-pointer">
+                        <label for="modal-prazo" class="text-xs font-medium text-slate-700 dark:text-slate-300">Prazo</label>
+                        <button type="button" data-action="clear-modal-prazo" class="text-xs text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 underline cursor-pointer">
                           Remover prazo
                         </button>
                       </div>
                       <input id="modal-prazo" type="date" value="${escapeHtml(form.prazo)}"
-                        class="w-full px-3 py-2 text-sm font-mono text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                        class="w-full px-3 py-2 text-sm font-mono text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
                     </div>
 
                     <div>
-                      <label for="modal-urgencia" class="block text-xs font-medium text-slate-700 mb-1">Urgência</label>
+                      <label for="modal-urgencia" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Urgência</label>
                       <select id="modal-urgencia"
-                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500">
                         ${["Alta", "Média", "Baixa"]
                           .map(
                             (u) =>
@@ -2814,7 +2890,7 @@
 
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <span class="block text-xs font-medium text-slate-700 mb-1">Rótulos</span>
+                      <span class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Rótulos</span>
                       ${renderCheckboxPopover({
                         scope: "modal",
                         mode: "label",
@@ -2822,13 +2898,13 @@
                         options: labels,
                         isOpen: state.openModalPickerType === "label",
                       })}
-                      <p class="text-[11px] text-slate-500 mt-1">
+                      <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
                         Marque múltiplos rótulos ou crie um novo na lista.
                       </p>
                     </div>
 
                     <div>
-                      <span class="block text-xs font-medium text-slate-700 mb-1">Categorias</span>
+                      <span class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Categorias</span>
                       ${renderCheckboxPopover({
                         scope: "modal",
                         mode: "category",
@@ -2836,7 +2912,7 @@
                         options: cats,
                         isOpen: state.openModalPickerType === "category",
                       })}
-                      <p class="text-[11px] text-slate-500 mt-1">
+                      <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
                         Marque múltiplas categorias ou crie uma nova na lista.
                       </p>
                     </div>
@@ -2844,9 +2920,9 @@
 
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label for="modal-status" class="block text-xs font-medium text-slate-700 mb-1">Status</label>
+                      <label for="modal-status" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Status</label>
                       <select id="modal-status"
-                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500">
                         ${TASK_STATUS_OPTIONS.map(
                           (s) =>
                             `<option value="${escapeHtml(s)}" ${
@@ -2857,30 +2933,30 @@
                     </div>
 
                     <div>
-                      <label for="modal-status-note" class="block text-xs font-medium text-slate-700 mb-1">Observação do status</label>
+                      <label for="modal-status-note" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Observação do status</label>
                       <input id="modal-status-note" type="text" value="${escapeHtml(
                         form.statusNote
                       )}" placeholder="Ex: Aguardando retorno de..."
-                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
                     </div>
                   </div>
 
                   <div>
-                    <label for="modal-observacoes" class="block text-xs font-medium text-slate-700 mb-1">Observações e acompanhamento</label>
+                    <label for="modal-observacoes" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Observações e acompanhamento</label>
                     <textarea id="modal-observacoes" rows="2" placeholder="Estágio atual, anotações rápidas ou com quem o assunto já foi tratado..."
-                      class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg resize-y focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">${escapeHtml(
+                      class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 rounded-lg resize-y focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500">${escapeHtml(
                         form.observacoes
                       )}</textarea>
                   </div>
 
                   ${historyHtml}
 
-                  <div class="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5">
+                  <div class="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5">
                     <div>
                       ${
                         state.modalMode === "edit"
                           ? `<button type="button" data-action="request-delete-task" data-id="${escapeHtml(task.id)}"
-                              class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-white border border-red-200 rounded-lg hover:bg-red-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                              class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-white border border-red-200 hover:bg-red-50 dark:text-red-400 dark:bg-slate-800 dark:border-red-900/70 dark:hover:bg-red-950/60 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                               <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                               <span>Excluir demanda</span>
                             </button>`
@@ -2889,11 +2965,11 @@
                     </div>
                     <div class="flex items-center gap-2.5 ml-auto">
                       <button type="button" data-action="close-modal"
-                        class="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                        class="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                         Cancelar
                       </button>
                       <button type="submit"
-                        class="px-4 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                        class="px-4 py-2 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                         Salvar alterações
                       </button>
                     </div>
@@ -2908,24 +2984,24 @@
           const task = state.confirmDeleteTask;
           if (!task) return "";
           return `
-            <div data-action="confirm-delete-backdrop" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40" role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title">
-              <div class="bg-white border border-slate-200 rounded-xl w-full max-w-md shadow-lg p-6 space-y-4">
+            <div data-action="confirm-delete-backdrop" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 dark:bg-black/65" role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title">
+              <div class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 rounded-xl w-full max-w-md shadow-lg dark:shadow-black/50 p-6 space-y-4">
                 <div class="flex items-start gap-3">
-                  <div class="p-2 rounded-lg bg-red-50 text-red-700 shrink-0">
+                  <div class="p-2 rounded-lg bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-400 shrink-0">
                     <i data-lucide="trash-2" class="w-5 h-5"></i>
                   </div>
                   <div class="min-w-0">
-                    <h2 id="confirm-delete-title" class="text-base font-semibold text-slate-900">
+                    <h2 id="confirm-delete-title" class="text-base font-semibold text-slate-900 dark:text-slate-100">
                       Excluir demanda definitivamente?
                     </h2>
-                    <p class="text-xs text-slate-600 mt-1 leading-relaxed">
-                      A demanda <span class="font-semibold text-slate-800">“${escapeHtml(task.titulo)}”</span> será removida da fila e apagada permanentemente da Planilha Google.
+                    <p class="text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
+                      A demanda <span class="font-semibold text-slate-800 dark:text-slate-200">“${escapeHtml(task.titulo)}”</span> será removida da fila e apagada permanentemente da Planilha Google.
                     </p>
                   </div>
                 </div>
-                <div class="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <div class="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
                   <button type="button" data-action="cancel-delete-task"
-                    class="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer">
+                    class="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 rounded-lg transition-colors cursor-pointer">
                     Cancelar
                   </button>
                   <button type="button" data-action="confirm-delete-task" data-id="${escapeHtml(task.id)}"
@@ -2940,6 +3016,7 @@
         }
 
         function render() {
+          const isDark = state.theme === "dark";
           const viewMeta =
             state.view === "tasks"
               ? { title: "Fila de Demandas", breadcrumb: "Triagem Executiva / Fila de Demandas" }
@@ -2947,28 +3024,28 @@
 
           const headerStatusHtml =
             state.isInitialLoading || state.isSaving
-              ? `<span class="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 whitespace-nowrap">
-                  <i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin text-blue-700"></i>
+              ? `<span class="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                  <i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin text-blue-700 dark:text-blue-400"></i>
                   <span>${state.isInitialLoading ? "Carregando planilha..." : "Salvando na planilha..."}</span>
                 </span>`
               : state.syncFeedback
-              ? `<span class="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 whitespace-nowrap tabular-nums">
-                  <i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-emerald-600"></i>
+              ? `<span class="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap tabular-nums">
+                  <i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400"></i>
                   <span>${escapeHtml(state.syncFeedback)}</span>
                 </span>`
               : "";
 
           const errorBannerHtml = state.apiError
-            ? `<div role="alert" class="mb-5 px-4 py-3 bg-red-50 border border-red-200 rounded-xl flex items-start justify-between gap-3 text-xs text-red-800">
+            ? `<div role="alert" class="mb-5 px-4 py-3 bg-red-50 border border-red-200 text-red-800 dark:bg-red-950/60 dark:border-red-900/70 dark:text-red-200 rounded-xl flex items-start justify-between gap-3 text-xs">
                 <div class="flex items-start gap-2.5">
-                  <i data-lucide="alert-circle" class="w-4 h-4 text-red-700 shrink-0 mt-0.5"></i>
+                  <i data-lucide="alert-circle" class="w-4 h-4 text-red-700 dark:text-red-400 shrink-0 mt-0.5"></i>
                   <div>
-                    <p class="font-semibold text-red-900">Erro de comunicação com o Google Apps Script</p>
+                    <p class="font-semibold text-red-900 dark:text-red-100">Erro de comunicação com o Google Apps Script</p>
                     <p class="mt-0.5 leading-relaxed">${escapeHtml(state.apiError)}</p>
                   </div>
                 </div>
                 <button type="button" data-action="dismiss-error" aria-label="Fechar aviso de erro"
-                  class="p-1 text-red-600 hover:text-red-900 rounded-md cursor-pointer">
+                  class="p-1 text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-200 rounded-md cursor-pointer">
                   <i data-lucide="x" class="w-4 h-4"></i>
                 </button>
               </div>`
@@ -2976,10 +3053,10 @@
 
           const mobileDrawer = state.mobileMenuOpen
             ? `<div class="fixed inset-0 z-40 lg:hidden flex">
-                <div data-action="close-mobile-menu" class="fixed inset-0 bg-slate-900/30"></div>
-                <aside class="relative z-50 w-64 bg-white h-full border-r border-slate-200">
+                <div data-action="close-mobile-menu" class="fixed inset-0 bg-slate-900/30 dark:bg-black/60"></div>
+                <aside class="relative z-50 w-64 bg-white dark:bg-slate-900 h-full border-r border-slate-200 dark:border-slate-800">
                   <button type="button" data-action="close-mobile-menu" aria-label="Fechar menu"
-                    class="absolute top-4 right-3 p-1.5 text-slate-500 hover:text-slate-900 cursor-pointer">
+                    class="absolute top-4 right-3 p-1.5 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 cursor-pointer">
                     <i data-lucide="x" class="w-5 h-5"></i>
                   </button>
                   ${renderSidebar()}
@@ -2997,25 +3074,31 @@
 
           const root = document.getElementById("app");
           root.innerHTML = `
-            <aside class="hidden lg:block w-64 shrink-0 bg-white border-r border-slate-200">
+            <aside class="hidden lg:block w-64 shrink-0 bg-white border-r border-slate-200 dark:bg-slate-900 dark:border-slate-800">
               <div class="sticky top-0 h-screen overflow-y-auto">${renderSidebar()}</div>
             </aside>
             ${mobileDrawer}
             <div class="flex-1 min-w-0 flex flex-col">
-              <header class="bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between gap-4">
+              <header class="bg-white border-b border-slate-200 dark:bg-slate-900 dark:border-slate-800 px-6 py-3.5 flex items-center justify-between gap-4">
                 <div class="flex items-center gap-3 min-w-0">
                   <button type="button" data-action="open-mobile-menu" aria-label="Abrir menu"
-                    class="lg:hidden p-1.5 -ml-1.5 text-slate-600 hover:text-slate-900 cursor-pointer">
+                    class="lg:hidden p-1.5 -ml-1.5 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 cursor-pointer">
                     <i data-lucide="menu" class="w-5 h-5"></i>
                   </button>
-                  <span class="text-xs font-medium text-slate-500 truncate whitespace-nowrap">${viewMeta.breadcrumb}</span>
+                  <span class="text-xs font-medium text-slate-500 dark:text-slate-400 truncate whitespace-nowrap">${viewMeta.breadcrumb}</span>
                 </div>
-                <div class="flex items-center gap-3 shrink-0">
+                <div class="flex items-center gap-2.5 shrink-0">
                   ${headerStatusHtml}
+                  <button type="button" data-action="toggle-theme"
+                    aria-label="${isDark ? "Ativar modo claro" : "Ativar modo escuro"}"
+                    title="${isDark ? "Ativar modo claro" : "Ativar modo escuro"}"
+                    class="inline-flex items-center justify-center p-2 text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-100 rounded-lg transition-colors shrink-0 cursor-pointer">
+                    <i data-lucide="${isDark ? "sun" : "moon"}" class="w-4 h-4 ${isDark ? "text-amber-400" : ""}"></i>
+                  </button>
                   <button type="button" data-action="sync-emails" ${
                     state.isSyncing || state.isInitialLoading ? "disabled" : ""
                   }
-                    class="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                    class="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
                     <i data-lucide="refresh-cw" class="w-3.5 h-3.5 ${
                       state.isSyncing ? "animate-spin" : ""
                     }"></i>
@@ -3027,7 +3110,7 @@
               <main class="flex-1 p-6 max-w-[1440px] w-full mx-auto">
                 ${errorBannerHtml}
                 <div class="mb-6">
-                  <h1 class="font-display text-2xl font-bold tracking-tight text-slate-900">${viewMeta.title}</h1>
+                  <h1 class="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">${viewMeta.title}</h1>
                 </div>
                 ${state.view === "tasks" ? renderTasksView() : renderRulesView()}
               </main>
@@ -3687,6 +3770,10 @@
             render();
           } else if (action === "close-mobile-menu") {
             state.mobileMenuOpen = false;
+            render();
+          } else if (action === "toggle-theme") {
+            state.theme = state.theme === "dark" ? "light" : "dark";
+            applyTheme(state.theme);
             render();
           } else if (action === "sync-emails") {
             void handleSyncEmails();
