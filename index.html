@@ -62,7 +62,7 @@
       (() => {
         const API_URL =
           "https://script.google.com/macros/s/AKfycbw1DQJVPXCKh6n-wi_xtwK0IvUOBVEcYMMf2ppgx81MESumH3Yj-K9G7ICRLwsN3AtuFA/exec";
-          
+
         const DEFAULT_CATEGORIES = [
           "Redação",
           "Revisão",
@@ -580,8 +580,17 @@
           );
           const titulo = String(r.titulo ?? "Demanda sem título").trim();
           const descricao = String(r.descricao ?? "").trim();
+          const rawAssunto =
+            [r.assunto_normalizado, r.assunto_original, r.assunto, r.subject]
+              .map((v) => (v === null || v === undefined ? "" : String(v).trim()))
+              .find(
+                (v) =>
+                  v.length > 0 &&
+                  v.toLowerCase() !== "null" &&
+                  v.toLowerCase() !== "undefined"
+              ) ?? "";
           const assuntoLimpo =
-            normalizeEmailSubject(String(r.assunto_original ?? r.assunto ?? "")) || "Sem assunto";
+            normalizeEmailSubject(rawAssunto) || rawAssunto || "Sem assunto";
 
           const rotulos = parseMultiValueField(
             r.rotulos ?? r.rotulo_aplicado ?? r.rotulo,
@@ -598,6 +607,13 @@
             id
           );
 
+          const rawObs = String(r.observacoes ?? "").trim();
+          const rawMotivo = String(
+            r.motivo_aguardo ?? r.observacao_status ?? r.statusNote ?? ""
+          ).trim();
+          const resolvedNote = rawMotivo || rawObs || undefined;
+          const resolvedObservacoes = rawObs || rawMotivo || undefined;
+
           return {
             id,
             triageId: String(r.triageId ?? r.thread_id ?? "gmail"),
@@ -611,6 +627,7 @@
             categoria: categorias.join(", "),
             categorias,
             assunto_original: assuntoLimpo,
+            assunto_normalizado: assuntoLimpo,
             solicitante_nome: solicitanteNome,
             solicitante_email: solicitanteEmail,
             data_email_original: dataOriginal || dataHoraOriginal.slice(0, 10),
@@ -619,8 +636,10 @@
             rotulos,
             regra_acionada: Boolean(r.regra_acionada ?? false),
             status,
-            statusNote: String(r.statusNote ?? r.observacao_status ?? "").trim() || undefined,
-            observacoes: String(r.observacoes ?? "").trim() || undefined,
+            statusNote: resolvedNote,
+            motivo_aguardo: resolvedNote,
+            observacao_status: resolvedObservacoes,
+            observacoes: resolvedObservacoes,
             hasNewMessage: Boolean(r.hasNewMessage ?? r.nova_mensagem ?? false),
             historico_mensagens,
             completed: status === "Concluído",
@@ -709,14 +728,32 @@
           );
           const rotuloJoined = rotulosFinal.join(", ");
           const categoriaJoined = categoriasFinal.join(", ");
+          const rawAssunto = String(
+            demanda.assunto_normalizado || demanda.assunto_original || ""
+          ).trim();
+          const assuntoLimpo =
+            normalizeEmailSubject(rawAssunto) || rawAssunto || "Sem assunto";
+          const syncedNote = String(
+            demanda.observacoes ??
+              demanda.motivo_aguardo ??
+              demanda.observacao_status ??
+              demanda.statusNote ??
+              ""
+          ).trim();
 
           return {
             ...demanda,
+            assunto_original: assuntoLimpo,
+            assunto_normalizado: assuntoLimpo,
             rotulos: rotulosFinal,
             categorias: categoriasFinal,
             rotulo_aplicado: rotuloJoined,
             rotulo: rotuloJoined,
             categoria: categoriaJoined,
+            observacoes: syncedNote,
+            motivo_aguardo: syncedNote,
+            observacao_status: syncedNote,
+            statusNote: syncedNote,
           };
         }
 
@@ -873,6 +910,8 @@
           pendingFocusPickerInput: false,
           expandedCards: {},
           expandedThreads: {},
+          savedNoteFeedback: {},
+          savedNoteTimers: {},
           modalTask: null,
           confirmDeleteTask: null,
           modalMode: "edit",
@@ -1612,18 +1651,31 @@
                       </div>`
                     : "";
 
+                  const savedFeedbackKind = state.savedNoteFeedback[task.id];
+                  const savedFeedbackHtml = `<span role="status" class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700"><i data-lucide="check" class="w-3 h-3"></i><span>Salvo</span></span>`;
+
                   const waitingFieldHtml =
                     currentStatus === "Aguardando"
                       ? `<div class="pt-0.5 max-w-xl">
-                          <label for="waiting-note-${escapeHtml(task.id)}" class="flex items-center gap-1.5 text-xs font-medium text-amber-800 mb-1">
-                            <i data-lucide="message-square-text" class="w-3.5 h-3.5 shrink-0"></i>
-                            <span>Motivo / pendência em aguardo</span>
-                          </label>
-                          <input id="waiting-note-${escapeHtml(task.id)}" type="text"
-                            data-role="waiting-note" data-id="${escapeHtml(task.id)}"
-                            value="${escapeHtml(task.statusNote || "")}"
-                            placeholder="Aguardando retorno de... (ex: aprovação do jurídico)"
-                            class="w-full px-3 py-1.5 text-xs text-slate-900 bg-amber-50/60 border border-amber-200 rounded-lg placeholder:text-amber-700/60 focus:outline-none focus:bg-white focus:ring-2 focus:ring-amber-500/25 focus:border-amber-400" />
+                          <div class="flex items-center justify-between gap-2 mb-1">
+                            <label for="waiting-note-${escapeHtml(task.id)}" class="flex items-center gap-1.5 text-xs font-medium text-amber-800">
+                              <i data-lucide="message-square-text" class="w-3.5 h-3.5 shrink-0"></i>
+                              <span>Motivo / pendência em aguardo</span>
+                            </label>
+                            ${savedFeedbackKind === "waiting" ? savedFeedbackHtml : ""}
+                          </div>
+                          <div class="flex items-center gap-2">
+                            <input id="waiting-note-${escapeHtml(task.id)}" type="text"
+                              data-role="waiting-note" data-id="${escapeHtml(task.id)}"
+                              value="${escapeHtml(task.statusNote || "")}"
+                              placeholder="Aguardando retorno de... (ex: aprovação do jurídico)"
+                              class="flex-1 min-w-0 px-3 py-1.5 text-xs text-slate-900 bg-amber-50/60 border border-amber-200 rounded-lg placeholder:text-amber-700/60 focus:outline-none focus:bg-white focus:ring-2 focus:ring-amber-500/25 focus:border-amber-400" />
+                            <button type="button" data-action="save-waiting-note" data-waiting-action="save" data-id="${escapeHtml(task.id)}"
+                              class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-amber-700 rounded-lg hover:bg-amber-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                              <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                              <span>Salvar motivo</span>
+                            </button>
+                          </div>
                         </div>`
                       : task.statusNote
                       ? `<div class="flex items-center gap-1.5 text-xs text-slate-500">
@@ -1667,19 +1719,25 @@
                           <span class="font-medium text-slate-800">Observações: </span>
                           <span>${escapeHtml(task.observacoes)}</span>
                         </div>
-                        <button type="button" data-action="edit-obs" data-id="${escapeHtml(task.id)}"
-                          class="text-xs font-medium text-blue-700 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
-                          Editar nota
-                        </button>
+                        <div class="flex items-center gap-2 shrink-0">
+                          ${savedFeedbackKind === "obs" ? savedFeedbackHtml : ""}
+                          <button type="button" data-action="edit-obs" data-id="${escapeHtml(task.id)}"
+                            class="text-xs font-medium text-blue-700 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
+                            Editar nota
+                          </button>
+                        </div>
                       </div>
                     `;
                   } else {
                     obsHtml = `
-                      <button type="button" data-action="edit-obs" data-id="${escapeHtml(task.id)}"
-                        class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-blue-700 transition-colors cursor-pointer">
-                        <i data-lucide="notebook-pen" class="w-3.5 h-3.5"></i>
-                        <span>Adicionar observação</span>
-                      </button>
+                      <div class="flex items-center gap-3">
+                        <button type="button" data-action="edit-obs" data-id="${escapeHtml(task.id)}"
+                          class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-blue-700 transition-colors cursor-pointer">
+                          <i data-lucide="notebook-pen" class="w-3.5 h-3.5"></i>
+                          <span>Adicionar observação</span>
+                        </button>
+                        ${savedFeedbackKind === "obs" ? savedFeedbackHtml : ""}
+                      </div>
                     `;
                   }
 
@@ -1806,22 +1864,32 @@
                             ${expandedDetailsHtml}
                           </div>
 
-                          <div class="text-xs text-slate-500 flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-0.5">
-                            <span>Solicitante: ${escapeHtml(task.solicitante_nome)}</span>
-                            <span aria-hidden="true">·</span>
-                            <span class="inline-flex items-center gap-1 font-mono tabular-nums text-slate-600">
-                              <i data-lucide="clock" class="w-3 h-3 text-slate-400"></i>
-                              <span>Recebido em ${escapeHtml(
-                                formatReceivedDateTime(
-                                  task.data_hora_email_original,
-                                  task.data_email_original,
-                                  "Sem data"
-                                )
-                              )}</span>
-                            </span>
-                            <span aria-hidden="true">·</span>
-                            <span class="truncate max-w-md">${escapeHtml(task.assunto_original)}</span>
-                            ${threadAccordionBtn}
+                          <div class="space-y-1 pt-0.5">
+                            <div class="text-xs text-slate-500 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                              <span>Solicitante: ${escapeHtml(task.solicitante_nome)}</span>
+                              <span aria-hidden="true">·</span>
+                              <span class="inline-flex items-center gap-1 font-mono tabular-nums text-slate-600">
+                                <i data-lucide="clock" class="w-3 h-3 text-slate-400"></i>
+                                <span>Recebido em ${escapeHtml(
+                                  formatReceivedDateTime(
+                                    task.data_hora_email_original,
+                                    task.data_email_original,
+                                    "Sem data"
+                                  )
+                                )}</span>
+                              </span>
+                              ${threadAccordionBtn}
+                            </div>
+
+                            <div class="text-xs text-slate-600 flex items-start gap-1.5 min-w-0">
+                              <i data-lucide="mail" class="w-3 h-3 text-slate-400 shrink-0 mt-0.5"></i>
+                              <p class="min-w-0 break-words leading-snug">
+                                <span class="font-medium text-slate-700">Assunto: </span>
+                                <span>${escapeHtml(
+                                  task.assunto_normalizado || task.assunto_original || "Sem assunto"
+                                )}</span>
+                              </p>
+                            </div>
                           </div>
 
                           ${threadDrawerHtml}
@@ -2502,6 +2570,23 @@
 
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
+                      <label for="modal-solicitante-nome" class="block text-xs font-medium text-slate-700 mb-1">Solicitante (Nome)</label>
+                      <input id="modal-solicitante-nome" type="text" value="${escapeHtml(
+                        task.solicitante_nome || ""
+                      )}" placeholder="Ex: Maria Silva"
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                    </div>
+                    <div>
+                      <label for="modal-solicitante-email" class="block text-xs font-medium text-slate-700 mb-1">E-mail do Solicitante</label>
+                      <input id="modal-solicitante-email" type="text" inputmode="email" value="${escapeHtml(
+                        task.solicitante_email || ""
+                      )}" placeholder="Ex: maria@empresa.com.br"
+                        class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
                       <div class="flex items-center justify-between mb-1">
                         <label for="modal-prazo" class="text-xs font-medium text-slate-700">Prazo</label>
                         <button type="button" data-action="clear-modal-prazo" class="text-xs text-slate-500 hover:text-slate-800 underline cursor-pointer">
@@ -2807,9 +2892,11 @@
           try {
             await postUpdateDemandToGas(updatedTask);
             state.syncFeedback = `Salvo na planilha às ${formatCurrentTime()}`;
+            return true;
           } catch (err) {
             state.apiError =
               err instanceof Error ? err.message : "Erro ao salvar demanda na planilha.";
+            return false;
           } finally {
             state.isSaving = false;
             render();
@@ -3136,21 +3223,73 @@
           URL.revokeObjectURL(url);
         }
 
-        function commitObs(taskId) {
+        function flashSavedNoteFeedback(taskId, kind) {
+          state.savedNoteFeedback[taskId] = kind;
+          if (state.savedNoteTimers[taskId]) {
+            window.clearTimeout(state.savedNoteTimers[taskId]);
+          }
+          render();
+          state.savedNoteTimers[taskId] = window.setTimeout(() => {
+            delete state.savedNoteFeedback[taskId];
+            delete state.savedNoteTimers[taskId];
+            render();
+          }, 2600);
+        }
+
+        async function commitWaitingNote(taskId, rawValue, forceSave = false) {
+          const task = state.tasks.find((t) => t.id === taskId);
+          if (!task) return;
+          markTaskAsViewed(taskId);
+          const raw = rawValue !== undefined ? String(rawValue) : String(task.statusNote || "");
+          const trimmed = raw.trim();
+          const baseline = String(task.observacoes ?? "").trim();
+          if (!forceSave && trimmed === baseline) {
+            return;
+          }
+          const cleaned = trimmed || undefined;
+          const updated = {
+            ...task,
+            statusNote: cleaned,
+            motivo_aguardo: cleaned,
+            observacao_status: cleaned,
+            observacoes: cleaned,
+          };
+          state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+          const ok = await persistDemand(updated);
+          if (ok) {
+            flashSavedNoteFeedback(taskId, "waiting");
+          }
+        }
+
+        async function commitObs(taskId) {
           const task = state.tasks.find((t) => t.id === taskId);
           state.editingObsTaskId = null;
           if (!task) {
             render();
             return;
           }
-          const cleaned = state.obsDraft.trim() || undefined;
-          if ((task.observacoes ?? undefined) === cleaned) {
+          const trimmed = state.obsDraft.trim();
+          const cleaned = trimmed || undefined;
+          if (
+            (task.observacoes ?? undefined) === cleaned &&
+            (task.motivo_aguardo ?? undefined) === cleaned &&
+            (task.statusNote ?? undefined) === cleaned
+          ) {
             render();
             return;
           }
-          const updated = { ...task, observacoes: cleaned };
+          const updated = {
+            ...task,
+            observacoes: cleaned,
+            motivo_aguardo: cleaned,
+            observacao_status: cleaned,
+            statusNote: cleaned,
+          };
           state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
-          void persistDemand(updated);
+          const ok = await persistDemand(updated);
+          if (ok) {
+            flashSavedNoteFeedback(taskId, "obs");
+          }
         }
 
         function togglePickerOption(optionValue) {
@@ -3384,6 +3523,13 @@
             markTaskAsViewed(id);
             state.expandedCards[id] = !state.expandedCards[id];
             render();
+          } else if (action === "save-waiting-note") {
+            e.stopPropagation();
+            const taskId = btn.dataset.id;
+            const inputEl = document.getElementById(`waiting-note-${taskId}`);
+            const currentTask = state.tasks.find((t) => t.id === taskId);
+            const val = inputEl ? inputEl.value : currentTask ? currentTask.statusNote || "" : "";
+            void commitWaitingNote(taskId, val, true);
           } else if (action === "edit-obs") {
             e.stopPropagation();
             const task = state.tasks.find((t) => t.id === btn.dataset.id);
@@ -3396,7 +3542,7 @@
           } else if (action === "save-obs") {
             e.stopPropagation();
             markTaskAsViewed(btn.dataset.id);
-            commitObs(btn.dataset.id);
+            void commitObs(btn.dataset.id);
           } else if (action === "cancel-obs") {
             e.stopPropagation();
             state.editingObsTaskId = null;
@@ -3709,7 +3855,14 @@
             const id = target.dataset.id;
             markTaskAsViewed(id);
             state.tasks = state.tasks.map((t) =>
-              t.id === id ? { ...t, statusNote: target.value } : t
+              t.id === id
+                ? {
+                    ...t,
+                    statusNote: target.value,
+                    motivo_aguardo: target.value,
+                    observacao_status: target.value,
+                  }
+                : t
             );
           } else if (target.dataset.role === "obs-input") {
             state.obsDraft = target.value;
@@ -3745,20 +3898,17 @@
           (e) => {
             const target = e.target;
             if (target.dataset.role === "waiting-note") {
-              const id = target.dataset.id;
-              const task = state.tasks.find((t) => t.id === id);
-              if (task) {
-                const cleaned = task.statusNote ? task.statusNote.trim() : undefined;
-                const updated = { ...task, statusNote: cleaned || undefined };
-                state.tasks = state.tasks.map((t) => (t.id === id ? updated : t));
-                void persistDemand(updated);
+              const related = e.relatedTarget;
+              if (related && related.dataset && related.dataset.waitingAction === "save") {
+                return;
               }
+              void commitWaitingNote(target.dataset.id, target.value, false);
             } else if (target.dataset.role === "obs-input") {
               const related = e.relatedTarget;
               if (related && related.dataset && related.dataset.obsAction === "cancel") {
                 return;
               }
-              commitObs(target.dataset.id);
+              void commitObs(target.dataset.id);
             } else if (target.dataset.role === "tag-input") {
               const ctx = target.dataset.context;
               const related = e.relatedTarget;
@@ -3787,11 +3937,11 @@
           const target = e.target;
           if (target.dataset.role === "waiting-note" && e.key === "Enter") {
             e.preventDefault();
-            target.blur();
+            void commitWaitingNote(target.dataset.id, target.value, true);
           } else if (target.dataset.role === "obs-input") {
             if (e.key === "Enter") {
               e.preventDefault();
-              commitObs(target.dataset.id);
+              void commitObs(target.dataset.id);
             } else if (e.key === "Escape") {
               e.preventDefault();
               state.editingObsTaskId = null;
@@ -3852,11 +4002,26 @@
             const titulo = document.getElementById("modal-titulo").value.trim();
             if (!titulo) return;
             const descricao = document.getElementById("modal-descricao").value.trim();
+            const solicitanteNomeEl = document.getElementById("modal-solicitante-nome");
+            const solicitanteEmailEl = document.getElementById("modal-solicitante-email");
+            const solicitanteNomeVal = solicitanteNomeEl ? solicitanteNomeEl.value.trim() : "";
+            const solicitanteEmailVal = solicitanteEmailEl ? solicitanteEmailEl.value.trim() : "";
             const prazoVal = document.getElementById("modal-prazo").value.trim();
             const urgencia = document.getElementById("modal-urgencia").value;
             const status = document.getElementById("modal-status").value;
-            const statusNote = document.getElementById("modal-status-note").value.trim() || undefined;
-            const observacoes = document.getElementById("modal-observacoes").value.trim() || undefined;
+            const cleanStatusNote = document.getElementById("modal-status-note").value.trim();
+            const cleanObs = document.getElementById("modal-observacoes").value.trim();
+            const base = state.modalTask;
+            const prevStatusNote = String(base.statusNote || "").trim();
+            const prevObs = String(base.observacoes || "").trim();
+            let syncedNote;
+            if (cleanStatusNote !== prevStatusNote && cleanObs === prevObs) {
+              syncedNote = cleanStatusNote || undefined;
+            } else if (cleanObs !== prevObs && cleanStatusNote === prevStatusNote) {
+              syncedNote = cleanObs || undefined;
+            } else {
+              syncedNote = cleanObs || cleanStatusNote || undefined;
+            }
             const isCompleted = status === "Concluído";
 
             const rotulosFinal = normalizeTagList(state.modalRotulos, "Geral");
@@ -3867,11 +4032,12 @@
             ensureCategoriesTracked(categoriasFinal);
             ensureLabelsTracked(rotulosFinal);
 
-            const base = state.modalTask;
             const updated = {
               ...base,
               titulo,
               descricao,
+              solicitante_nome: solicitanteNomeVal || "Solicitante",
+              solicitante_email: solicitanteEmailVal,
               prazo: prazoVal || null,
               urgencia,
               rotulos: rotulosFinal,
@@ -3879,8 +4045,10 @@
               categorias: categoriasFinal,
               categoria: categoriaJoined,
               status,
-              statusNote,
-              observacoes,
+              statusNote: cleanStatusNote || syncedNote,
+              motivo_aguardo: cleanStatusNote || syncedNote,
+              observacao_status: syncedNote,
+              observacoes: syncedNote,
               completed: isCompleted,
               completedAt: isCompleted ? base.completedAt ?? new Date().toISOString() : undefined,
             };
