@@ -134,6 +134,7 @@
         ];
 
         const STORAGE_CATEGORIES_KEY = "triagem_executiva_categories_v1";
+        const STORAGE_DELETED_CATEGORIES_KEY = "categorias_excluidas";
         const STORAGE_LABELS_KEY = "triagem_executiva_labels_v1";
         const STORAGE_LABEL_COLORS_KEY = "triagem_executiva_label_colors_v1";
         const STORAGE_VIEWED_IDS_KEY = "triagem_executiva_viewed_ids_v1";
@@ -202,22 +203,36 @@
           return result;
         }
 
+        function getExcludedCategorySet(overrideList) {
+          const list = overrideList ?? loadStoredIdList(STORAGE_DELETED_CATEGORIES_KEY);
+          return new Set(list.map((c) => String(c ?? "").trim().toLowerCase()).filter(Boolean));
+        }
+
         function loadStoredCategories() {
+          const excludedSet = getExcludedCategorySet();
           try {
             const raw = localStorage.getItem(STORAGE_CATEGORIES_KEY);
-            if (!raw) return [...DEFAULT_CATEGORIES];
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              const set = new Set(DEFAULT_CATEGORIES);
-              for (const c of parsed) {
-                const cleaned = String(c ?? "").trim();
-                if (cleaned) set.add(cleaned);
-              }
-              return Array.from(set);
+            if (raw === null) {
+              return DEFAULT_CATEGORIES.filter((c) => !excludedSet.has(c.toLowerCase()));
             }
-            return [...DEFAULT_CATEGORIES];
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              const seen = new Set();
+              const result = [];
+              for (const c of parsed) {
+                for (const part of parseMultiValueField(c, "")) {
+                  const key = part.toLowerCase();
+                  if (!excludedSet.has(key) && !seen.has(key)) {
+                    seen.add(key);
+                    result.push(part);
+                  }
+                }
+              }
+              return result;
+            }
+            return DEFAULT_CATEGORIES.filter((c) => !excludedSet.has(c.toLowerCase()));
           } catch {
-            return [...DEFAULT_CATEGORIES];
+            return DEFAULT_CATEGORIES.filter((c) => !excludedSet.has(c.toLowerCase()));
           }
         }
 
@@ -421,6 +436,59 @@
           }
           const mm = String(monthIndex + 1).padStart(2, "0");
           return `${dd}/${mm}/${year}`;
+        }
+
+        function toLocalIsoDay(date) {
+          const yyyy = date.getFullYear();
+          const mm = String(date.getMonth() + 1).padStart(2, "0");
+          const dd = String(date.getDate()).padStart(2, "0");
+          return `${yyyy}-${mm}-${dd}`;
+        }
+
+        function renderDeadlineBadge(isoDate, isCompleted) {
+          const trimmed = String(isoDate ?? "").trim();
+          const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
+
+          let text = "Sem prazo";
+          let containerClass = "bg-slate-100 text-slate-500 border-slate-200";
+          let iconClass = "text-slate-400";
+
+          if (match) {
+            const formatted = formatDisplayDate(trimmed, "Sem prazo");
+            if (isCompleted) {
+              text = formatted;
+            } else {
+              const deadlineIso = `${match[1]}-${match[2]}-${match[3]}`;
+              const now = new Date();
+              const todayIso = toLocalIsoDay(now);
+              const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+              const tomorrowIso = toLocalIsoDay(tomorrow);
+
+              if (deadlineIso < todayIso) {
+                text = `${formatted} (Atrasado)`;
+                containerClass = "bg-red-50 text-red-700 border-red-200 font-medium";
+                iconClass = "text-red-600";
+              } else if (deadlineIso === todayIso) {
+                text = `${formatted} (Hoje)`;
+                containerClass = "bg-amber-50 text-amber-800 border-amber-200 font-medium";
+                iconClass = "text-amber-600";
+              } else if (deadlineIso === tomorrowIso) {
+                text = `${formatted} (Amanhã)`;
+                containerClass = "bg-amber-50 text-amber-800 border-amber-200 font-medium";
+                iconClass = "text-amber-600";
+              } else {
+                text = formatted;
+                containerClass = "bg-emerald-50 text-emerald-700 border-emerald-200";
+                iconClass = "text-emerald-600";
+              }
+            }
+          }
+
+          return `<span title="${escapeHtml(trimmed)}"
+            class="inline-flex items-center gap-1 px-2 py-0.5 border rounded-md font-mono tabular-nums text-xs whitespace-nowrap shrink-0 ${containerClass}">
+            <i data-lucide="calendar" class="w-3.5 h-3.5 shrink-0 ${iconClass}"></i>
+            <span>${escapeHtml(text)}</span>
+          </span>`;
         }
 
         function formatReceivedDateTime(isoDateTime, fallbackDate, emptyFallback = "Sem data") {
@@ -655,15 +723,29 @@
           return "conteudo";
         }
 
+        function inferMatchTypeFromCondicao(condicao) {
+          const cleaned = String(condicao ?? "").trim();
+          if (cleaned.startsWith("@")) return "dominio";
+          if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned)) return "email";
+          return "conteudo";
+        }
+
         function normalizeRule(raw, index) {
           const r = raw || {};
+          const condicao = String(r.condicao ?? r.matchValue ?? r.valor ?? "").trim();
+          const rawMatchType = r.matchType ?? r.criterio;
+          const hasExplicitMatchType =
+            rawMatchType !== undefined && String(rawMatchType).trim().length > 0;
           const rotuloList = parseMultiValueField(r.rotulos ?? r.rotulo, "Geral");
           const categoriaList = parseMultiValueField(r.categorias ?? r.categoria, "Outro");
           return {
             id: String(r.id ?? `rule-${index}-${uuid()}`),
             ativo: r.ativo !== false && r.ativa !== false && r.ativo !== "false",
-            matchType: normalizeMatchType(r.matchType ?? r.criterio),
-            matchValue: String(r.matchValue ?? r.valor ?? "").trim(),
+            matchType: hasExplicitMatchType
+              ? normalizeMatchType(rawMatchType)
+              : inferMatchTypeFromCondicao(condicao),
+            matchValue: condicao,
+            condicao,
             rotulo: rotuloList.join(", "),
             categoria: categoriaList.join(", "),
           };
@@ -686,7 +768,7 @@
             demandas: rawDemandas.map((item, idx) => normalizeTask(item, idx)),
             regras: rawRegras
               .map((item, idx) => normalizeRule(item, idx))
-              .filter((r) => r.matchValue.length > 0 && r.rotulo.length > 0),
+              .filter((r) => (r.condicao || r.matchValue).length > 0 && r.rotulo.length > 0),
             categorias: rawCategorias,
           };
         }
@@ -796,7 +878,7 @@
             regras: hasRegras
               ? container.regras
                   .map((item, idx) => normalizeRule(item, idx))
-                  .filter((r) => r.matchValue.length > 0 && r.rotulo.length > 0)
+                  .filter((r) => (r.condicao || r.matchValue).length > 0 && r.rotulo.length > 0)
               : null,
             categorias: Array.isArray(container.categorias)
               ? container.categorias.map((c) => String(c ?? "").trim()).filter(Boolean)
@@ -855,6 +937,21 @@
         }
 
         async function postSaveRulesToGas(regras) {
+          const listaFormatada = (regras || []).map((r) => {
+            const condicao = String(r.condicao ?? r.matchValue ?? "").trim();
+            const rotulo = parseMultiValueField(r.rotulo, "Geral").join(", ");
+            const categoria = parseMultiValueField(r.categoria, "Outro").join(", ");
+            return {
+              condicao,
+              rotulo,
+              categoria,
+              id: r.id,
+              ativo: r.ativo,
+              matchType: r.matchType,
+              matchValue: condicao,
+            };
+          });
+
           const res = await fetch(API_URL, {
             method: "POST",
             redirect: "follow",
@@ -863,7 +960,7 @@
             },
             body: JSON.stringify({
               acao: "salvar_regras",
-              regras,
+              regras: listaFormatada,
             }),
           });
           if (!res.ok) {
@@ -890,11 +987,13 @@
           labelColors: loadStoredLabelColors(),
           viewedIds: loadStoredIdList(STORAGE_VIEWED_IDS_KEY),
           deletedIds: loadStoredIdList(STORAGE_DELETED_IDS_KEY),
+          deletedCategories: loadStoredIdList(STORAGE_DELETED_CATEGORIES_KEY),
           colorPickerLabel: null,
           isInitialLoading: true,
           isSyncing: false,
           isSaving: false,
           syncFeedback: null,
+          rulesSavedFeedback: null,
           apiError: null,
           search: "",
           statusFilter: "Todos",
@@ -936,18 +1035,32 @@
           pendingFocusTagContext: null,
         };
 
-        function mergeCategoryLists(base, incoming, rules, tasks) {
-          const set = new Set(base);
-          for (const c of incoming) {
-            for (const part of parseMultiValueField(c, "")) set.add(part);
+        function mergeCategoryLists(base, incoming, rules, tasks, excludedOverride) {
+          const excludedSet = getExcludedCategorySet(excludedOverride);
+          const seen = new Set();
+          const result = [];
+          const tryAdd = (rawItem) => {
+            const cleaned = String(rawItem ?? "").trim();
+            if (!cleaned) return;
+            const key = cleaned.toLowerCase();
+            if (excludedSet.has(key) || seen.has(key)) return;
+            seen.add(key);
+            result.push(cleaned);
+          };
+
+          for (const c of base || []) {
+            for (const part of parseMultiValueField(c, "")) tryAdd(part);
           }
-          for (const r of rules) {
-            for (const part of parseMultiValueField(r.categoria, "")) set.add(part);
+          for (const c of incoming || []) {
+            for (const part of parseMultiValueField(c, "")) tryAdd(part);
           }
-          for (const t of tasks) {
-            for (const part of getTaskCategories(t)) set.add(part);
+          for (const r of rules || []) {
+            for (const part of parseMultiValueField(r.categoria, "")) tryAdd(part);
           }
-          return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+          for (const t of tasks || []) {
+            for (const part of getTaskCategories(t)) tryAdd(part);
+          }
+          return result.sort((a, b) => a.localeCompare(b, "pt-BR"));
         }
 
         function mergeLabelLists(base, rules, tasks) {
@@ -982,6 +1095,14 @@
         function ensureCategoriesTracked(rawCategories) {
           const cleaned = normalizeTagList(rawCategories);
           if (cleaned.length === 0) return;
+          const cleanedLower = new Set(cleaned.map((c) => c.toLowerCase()));
+          const nextDeleted = state.deletedCategories.filter(
+            (c) => !cleanedLower.has(c.toLowerCase())
+          );
+          if (nextDeleted.length !== state.deletedCategories.length) {
+            state.deletedCategories = nextDeleted;
+            saveStoredIdList(STORAGE_DELETED_CATEGORIES_KEY, nextDeleted);
+          }
           const missing = cleaned.filter(
             (item) => !state.categories.some((c) => c.toLowerCase() === item.toLowerCase())
           );
@@ -1007,10 +1128,11 @@
           state.tasks = visibleDemandas;
           state.rules = payload.regras;
           state.categories = mergeCategoryLists(
-            state.categories.length > 0 ? state.categories : DEFAULT_CATEGORIES,
+            state.categories,
             payload.categorias,
             payload.regras,
-            visibleDemandas
+            visibleDemandas,
+            state.deletedCategories
           );
           saveStoredCategories(state.categories);
           state.labels = mergeLabelLists(
@@ -1029,17 +1151,13 @@
         }
 
         function getAvailableCategories() {
-          const set = new Set(DEFAULT_CATEGORIES);
-          for (const c of state.categories) {
-            for (const part of parseMultiValueField(c, "")) set.add(part);
-          }
-          for (const r of state.rules) {
-            for (const part of parseMultiValueField(r.categoria, "")) set.add(part);
-          }
-          for (const t of state.tasks) {
-            for (const part of getTaskCategories(t)) set.add(part);
-          }
-          return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+          return mergeCategoryLists(
+            state.categories,
+            [],
+            state.rules,
+            state.tasks,
+            state.deletedCategories
+          );
         }
 
         function getActiveLabelFilter(availableLabels) {
@@ -1901,11 +2019,7 @@
                               isOpen: isCategoryPickerOpen,
                             })}
                             <span aria-hidden="true" class="text-slate-300 text-xs">·</span>
-                            <span title="${escapeHtml(task.prazo || "")}"
-                              class="inline-flex items-center gap-1 font-mono tabular-nums text-xs text-slate-700">
-                              <i data-lucide="calendar" class="w-3.5 h-3.5 text-slate-400"></i>
-                              ${escapeHtml(formatDisplayDate(task.prazo, "Sem prazo"))}
-                            </span>
+                            ${renderDeadlineBadge(task.prazo, isCompleted)}
                           </div>
 
                           <div>
@@ -2400,11 +2514,22 @@
                       Todas as alterações são salvas automaticamente na Planilha Google para a próxima sincronização do Gmail.
                     </p>
                   </div>
-                  <button type="button" data-action="reset-rules"
-                    class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
-                    <span>Restaurar padrões</span>
-                  </button>
+                  <div class="flex flex-wrap items-center gap-2.5">
+                    ${
+                      state.rulesSavedFeedback
+                        ? `<span role="status"
+                            class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md whitespace-nowrap">
+                            <i data-lucide="check" class="w-3.5 h-3.5 text-emerald-700"></i>
+                            <span>${escapeHtml(state.rulesSavedFeedback)}</span>
+                          </span>`
+                        : ""
+                    }
+                    <button type="button" data-action="reset-rules"
+                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+                      <span>Restaurar padrões</span>
+                    </button>
+                  </div>
                 </div>
 
                 <form id="create-rule-form" class="p-6 border-b border-slate-200 bg-slate-50/60 space-y-3">
@@ -3012,10 +3137,11 @@
                 state.rules = nextRules;
               }
               state.categories = mergeCategoryLists(
-                state.categories.length > 0 ? state.categories : DEFAULT_CATEGORIES,
+                state.categories,
                 responsePayload.categorias || [],
                 nextRules,
-                nextTasks
+                nextTasks,
+                state.deletedCategories
               );
               saveStoredCategories(state.categories);
               state.labels = mergeLabelLists(
@@ -3038,10 +3164,13 @@
         async function persistRules(nextRules) {
           state.isSaving = true;
           state.apiError = null;
+          state.rulesSavedFeedback = null;
           render();
           try {
             await postSaveRulesToGas(nextRules);
-            state.syncFeedback = `Regras salvas às ${formatCurrentTime()}`;
+            const timeLabel = formatCurrentTime();
+            state.syncFeedback = `Regras salvas na planilha às ${timeLabel}`;
+            state.rulesSavedFeedback = `Regras salvas na planilha às ${timeLabel}`;
           } catch (err) {
             state.apiError =
               err instanceof Error ? err.message : "Erro ao salvar regras na planilha.";
@@ -3815,6 +3944,7 @@
                     ...r,
                     matchType: matchTypeEl ? matchTypeEl.value : r.matchType,
                     matchValue,
+                    condicao: matchValue,
                     rotulo: rotulosFinal.join(", "),
                     categoria: categoriasFinal.join(", "),
                   }
@@ -3840,10 +3970,16 @@
             state.rules = next;
             void persistRules(next);
           } else if (action === "reset-rules") {
-            state.rules = [...DEFAULT_RULES];
+            state.deletedCategories = [];
+            saveStoredIdList(STORAGE_DELETED_CATEGORIES_KEY, []);
+            const defaultRulesWithCondicao = DEFAULT_RULES.map((r) => ({
+              ...r,
+              condicao: r.matchValue,
+            }));
+            state.rules = defaultRulesWithCondicao;
             state.categories = [...DEFAULT_CATEGORIES];
             saveStoredCategories(state.categories);
-            state.labels = mergeLabelLists(["Geral"], DEFAULT_RULES, state.tasks);
+            state.labels = mergeLabelLists(["Geral"], defaultRulesWithCondicao, state.tasks);
             saveStoredLabels(state.labels);
             void persistRules(state.rules);
           } else if (action === "toggle-label-color") {
@@ -3879,10 +4015,16 @@
           } else if (action === "delete-label-item") {
             deleteLabelItem(btn.dataset.label);
           } else if (action === "delete-category") {
-            const cat = btn.dataset.category;
-            if (state.categories.length > 1) {
-              state.categories = state.categories.filter((c) => c !== cat);
+            const cat = String(btn.dataset.category ?? "").trim();
+            if (cat && state.categories.length > 1) {
+              state.categories = state.categories.filter(
+                (c) => c.toLowerCase() !== cat.toLowerCase()
+              );
               saveStoredCategories(state.categories);
+              if (!state.deletedCategories.some((c) => c.toLowerCase() === cat.toLowerCase())) {
+                state.deletedCategories = [...state.deletedCategories, cat];
+                saveStoredIdList(STORAGE_DELETED_CATEGORIES_KEY, state.deletedCategories);
+              }
               render();
             }
           }
@@ -4209,6 +4351,7 @@
               ativo: true,
               matchType,
               matchValue,
+              condicao: matchValue,
               rotulo: rotulosFinal.join(", "),
               categoria: categoriasFinal.join(", "),
             };
