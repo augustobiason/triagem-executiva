@@ -913,6 +913,7 @@
           savedNoteFeedback: {},
           savedNoteTimers: {},
           modalTask: null,
+          modalForm: null,
           confirmDeleteTask: null,
           modalMode: "edit",
           modalShowHistory: false,
@@ -1070,7 +1071,14 @@
             const currentStatus = task.status ?? (task.completed ? "Concluído" : "A Fazer");
             const taskLabels = getTaskLabels(task);
             const taskCategories = getTaskCategories(task);
-            if (state.statusFilter !== "Todos" && currentStatus !== state.statusFilter) return false;
+            if (state.statusFilter === "Concluído") {
+              if (currentStatus !== "Concluído") return false;
+            } else {
+              if (currentStatus === "Concluído") return false;
+              if (state.statusFilter !== "Todos" && currentStatus !== state.statusFilter) {
+                return false;
+              }
+            }
             if (state.urgencyFilter !== "Todas" && task.urgencia !== state.urgencyFilter) return false;
             if (activeLabelFilter !== "Todos" && !taskLabels.includes(activeLabelFilter)) return false;
             if (activeCategoryFilter !== "Todas" && !taskCategories.includes(activeCategoryFilter)) {
@@ -1537,7 +1545,7 @@
           }
 
           const counts = {
-            Todos: state.tasks.length,
+            Todos: 0,
             "A Fazer": 0,
             Iniciado: 0,
             Aguardando: 0,
@@ -1546,6 +1554,9 @@
           for (const t of state.tasks) {
             const st = t.status ?? (t.completed ? "Concluído" : "A Fazer");
             counts[st] = (counts[st] ?? 0) + 1;
+            if (st !== "Concluído") {
+              counts.Todos += 1;
+            }
           }
 
           const availableLabels = getAvailableLabels();
@@ -1577,17 +1588,64 @@
 
           let listHtml = "";
           if (filtered.length === 0) {
-            listHtml = `
-              <div class="py-12 px-6 text-center">
-                <p class="text-sm font-medium text-slate-800">
-                  Nenhuma demanda corresponde aos filtros selecionados
-                </p>
-                <button type="button" data-action="clear-filters"
-                  class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 hover:underline cursor-pointer">
-                  Limpar filtros
-                </button>
-              </div>
-            `;
+            const hasSecondaryFilters =
+              Boolean(state.search.trim()) ||
+              state.urgencyFilter !== "Todas" ||
+              activeLabelFilter !== "Todos" ||
+              activeCategoryFilter !== "Todas";
+            if (hasSecondaryFilters) {
+              listHtml = `
+                <div class="py-12 px-6 text-center">
+                  <p class="text-sm font-medium text-slate-800">
+                    Nenhuma demanda corresponde aos filtros selecionados
+                  </p>
+                  <button type="button" data-action="clear-filters"
+                    class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 hover:underline cursor-pointer">
+                    Limpar filtros
+                  </button>
+                </div>
+              `;
+            } else if (state.statusFilter === "Concluído") {
+              listHtml = `
+                <div class="py-12 px-6 text-center">
+                  <p class="text-sm font-medium text-slate-800">
+                    Nenhuma demanda concluída no momento
+                  </p>
+                  <button type="button" data-action="status-filter" data-value="Todos"
+                    class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 hover:underline cursor-pointer">
+                    Ver demandas ativas
+                  </button>
+                </div>
+              `;
+            } else if (state.statusFilter === "Todos") {
+              listHtml = `
+                <div class="py-12 px-6 text-center">
+                  <p class="text-sm font-medium text-slate-800">
+                    Nenhuma demanda ativa no momento
+                  </p>
+                  ${
+                    counts["Concluído"] > 0
+                      ? `<button type="button" data-action="status-filter" data-value="Concluído"
+                          class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 hover:underline cursor-pointer">
+                          Ver concluídos (${counts["Concluído"]})
+                        </button>`
+                      : ""
+                  }
+                </div>
+              `;
+            } else {
+              listHtml = `
+                <div class="py-12 px-6 text-center">
+                  <p class="text-sm font-medium text-slate-800">
+                    Nenhuma demanda com status &ldquo;${escapeHtml(state.statusFilter)}&rdquo;
+                  </p>
+                  <button type="button" data-action="status-filter" data-value="Todos"
+                    class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 hover:underline cursor-pointer">
+                    Ver todas as demandas ativas
+                  </button>
+                </div>
+              `;
+            }
           } else {
             const viewedSet = new Set(state.viewedIds);
             listHtml = `<div class="divide-y divide-slate-200">
@@ -2478,9 +2536,25 @@
           `;
         }
 
+        function createModalFormDraft(task) {
+          const base = task || {};
+          return {
+            titulo: String(base.titulo ?? ""),
+            descricao: String(base.descricao ?? ""),
+            solicitante_nome: String(base.solicitante_nome ?? ""),
+            solicitante_email: String(base.solicitante_email ?? ""),
+            prazo: String(base.prazo ?? ""),
+            urgencia: String(base.urgencia || "Média"),
+            status: String(base.status || "A Fazer"),
+            statusNote: String(base.statusNote ?? ""),
+            observacoes: String(base.observacoes ?? ""),
+          };
+        }
+
         function renderModal() {
           const task = state.modalTask;
           if (!task) return "";
+          const form = state.modalForm || createModalFormDraft(task);
 
           const labelSet = new Set(["Geral", ...getAvailableLabels()]);
           for (const lbl of state.modalRotulos) labelSet.add(lbl);
@@ -2544,7 +2618,9 @@
                       ${state.modalMode === "create" ? "Nova demanda" : "Editar demanda"}
                     </h2>
                     <p class="text-xs text-slate-500 mt-0.5 truncate">
-                      ${escapeHtml(task.solicitante_nome)} · ${escapeHtml(task.assunto_original)}
+                      ${escapeHtml(form.solicitante_nome || task.solicitante_nome)} · ${escapeHtml(
+                        task.assunto_normalizado || task.assunto_original
+                      )}
                     </p>
                   </div>
                   <button type="button" data-action="close-modal" aria-label="Fechar janela"
@@ -2556,7 +2632,7 @@
                 <form id="modal-task-form" class="p-6 space-y-4">
                   <div>
                     <label for="modal-titulo" class="block text-xs font-medium text-slate-700 mb-1">Título da tarefa</label>
-                    <input id="modal-titulo" type="text" required value="${escapeHtml(task.titulo)}"
+                    <input id="modal-titulo" type="text" required value="${escapeHtml(form.titulo)}"
                       class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
                   </div>
 
@@ -2564,7 +2640,7 @@
                     <label for="modal-descricao" class="block text-xs font-medium text-slate-700 mb-1">Descrição / resumo</label>
                     <textarea id="modal-descricao" rows="3"
                       class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg resize-y focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">${escapeHtml(
-                        task.descricao
+                        form.descricao
                       )}</textarea>
                   </div>
 
@@ -2572,14 +2648,14 @@
                     <div>
                       <label for="modal-solicitante-nome" class="block text-xs font-medium text-slate-700 mb-1">Solicitante (Nome)</label>
                       <input id="modal-solicitante-nome" type="text" value="${escapeHtml(
-                        task.solicitante_nome || ""
+                        form.solicitante_nome
                       )}" placeholder="Ex: Maria Silva"
                         class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
                     </div>
                     <div>
                       <label for="modal-solicitante-email" class="block text-xs font-medium text-slate-700 mb-1">E-mail do Solicitante</label>
                       <input id="modal-solicitante-email" type="text" inputmode="email" value="${escapeHtml(
-                        task.solicitante_email || ""
+                        form.solicitante_email
                       )}" placeholder="Ex: maria@empresa.com.br"
                         class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
                     </div>
@@ -2593,7 +2669,7 @@
                           Remover prazo
                         </button>
                       </div>
-                      <input id="modal-prazo" type="date" value="${escapeHtml(task.prazo || "")}"
+                      <input id="modal-prazo" type="date" value="${escapeHtml(form.prazo)}"
                         class="w-full px-3 py-2 text-sm font-mono text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
                     </div>
 
@@ -2604,7 +2680,7 @@
                         ${["Alta", "Média", "Baixa"]
                           .map(
                             (u) =>
-                              `<option value="${u}" ${task.urgencia === u ? "selected" : ""}>${u}</option>`
+                              `<option value="${u}" ${form.urgencia === u ? "selected" : ""}>${u}</option>`
                           )
                           .join("")}
                       </select>
@@ -2649,7 +2725,7 @@
                         ${TASK_STATUS_OPTIONS.map(
                           (s) =>
                             `<option value="${escapeHtml(s)}" ${
-                              task.status === s ? "selected" : ""
+                              form.status === s ? "selected" : ""
                             }>${escapeHtml(s)}</option>`
                         ).join("")}
                       </select>
@@ -2658,7 +2734,7 @@
                     <div>
                       <label for="modal-status-note" class="block text-xs font-medium text-slate-700 mb-1">Observação do status</label>
                       <input id="modal-status-note" type="text" value="${escapeHtml(
-                        task.statusNote || ""
+                        form.statusNote
                       )}" placeholder="Ex: Aguardando retorno de..."
                         class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600" />
                     </div>
@@ -2668,7 +2744,7 @@
                     <label for="modal-observacoes" class="block text-xs font-medium text-slate-700 mb-1">Observações e acompanhamento</label>
                     <textarea id="modal-observacoes" rows="2" placeholder="Estágio atual, anotações rápidas ou com quem o assunto já foi tratado..."
                       class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-lg resize-y focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600">${escapeHtml(
-                        task.observacoes || ""
+                        form.observacoes
                       )}</textarea>
                   </div>
 
@@ -3496,7 +3572,9 @@
             render();
           } else if (action === "clear-filters") {
             state.search = "";
-            state.statusFilter = "Todos";
+            if (state.statusFilter !== "Concluído") {
+              state.statusFilter = "Todos";
+            }
             state.urgencyFilter = "Todas";
             state.labelFilter = "Todos";
             state.categoryFilter = "Todas";
@@ -3563,17 +3641,20 @@
             state.openCardPicker = isSame ? null : { taskId, type };
             render();
           } else if (action === "toggle-modal-picker") {
+            e.stopPropagation();
             const type = btn.dataset.type;
             state.openCardPicker = null;
             state.pickerNewDraft = "";
             state.openModalPickerType = state.openModalPickerType === type ? null : type;
             render();
           } else if (action === "close-picker") {
+            e.stopPropagation();
             state.openCardPicker = null;
             state.openModalPickerType = null;
             state.pickerNewDraft = "";
             render();
           } else if (action === "picker-add-option") {
+            e.stopPropagation();
             addNewOptionFromPicker();
           } else if (action === "toggle-thread") {
             e.stopPropagation();
@@ -3590,6 +3671,7 @@
               state.openModalPickerType = null;
               state.pickerNewDraft = "";
               state.modalTask = { ...task };
+              state.modalForm = createModalFormDraft(task);
               state.modalMode = "edit";
               state.modalShowHistory = false;
               state.modalRotulos = getTaskLabels(task);
@@ -3627,6 +3709,7 @@
               historico_mensagens: [],
               completed: false,
             };
+            state.modalForm = createModalFormDraft(state.modalTask);
             state.modalMode = "create";
             state.modalShowHistory = false;
             state.modalRotulos = ["Geral"];
@@ -3634,17 +3717,21 @@
             render();
           } else if (action === "close-modal") {
             state.modalTask = null;
+            state.modalForm = null;
             state.openModalPickerType = null;
             state.pickerNewDraft = "";
             render();
           } else if (action === "modal-backdrop") {
             if (e.target === btn) {
               state.modalTask = null;
+              state.modalForm = null;
               state.openModalPickerType = null;
               state.pickerNewDraft = "";
               render();
             }
           } else if (action === "clear-modal-prazo") {
+            e.stopPropagation();
+            if (state.modalForm) state.modalForm.prazo = "";
             const input = document.getElementById("modal-prazo");
             if (input) input.value = "";
           } else if (action === "toggle-modal-history") {
@@ -3668,6 +3755,7 @@
               state.openCardPicker = null;
               state.openModalPickerType = null;
               state.modalTask = null;
+              state.modalForm = null;
               state.confirmDeleteTask = task;
               render();
             }
@@ -3816,6 +3904,9 @@
                 nextStatus === "Concluído" ? task.completedAt ?? new Date().toISOString() : undefined,
             };
             state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+            if (state.openCardPicker && state.openCardPicker.taskId === taskId) {
+              state.openCardPicker = null;
+            }
             void persistDemand(updated);
           } else if (target.dataset.role === "label-filter") {
             state.labelFilter = target.value;
@@ -3835,6 +3926,12 @@
           } else if (target.dataset.role === "picker-checkbox") {
             const val = target.dataset.value;
             if (val) togglePickerOption(val);
+          } else if (state.modalForm && target.id === "modal-prazo") {
+            state.modalForm.prazo = target.value;
+          } else if (state.modalForm && target.id === "modal-urgencia") {
+            state.modalForm.urgencia = target.value;
+          } else if (state.modalForm && target.id === "modal-status") {
+            state.modalForm.status = target.value;
           } else if (target.id === "rule-match-type") {
             state.ruleFormMatchType = target.value;
           }
@@ -3842,7 +3939,21 @@
 
         rootEl.addEventListener("input", (e) => {
           const target = e.target;
-          if (target.id === "task-search-input") {
+          if (state.modalForm && target.id === "modal-titulo") {
+            state.modalForm.titulo = target.value;
+          } else if (state.modalForm && target.id === "modal-descricao") {
+            state.modalForm.descricao = target.value;
+          } else if (state.modalForm && target.id === "modal-solicitante-nome") {
+            state.modalForm.solicitante_nome = target.value;
+          } else if (state.modalForm && target.id === "modal-solicitante-email") {
+            state.modalForm.solicitante_email = target.value;
+          } else if (state.modalForm && target.id === "modal-prazo") {
+            state.modalForm.prazo = target.value;
+          } else if (state.modalForm && target.id === "modal-status-note") {
+            state.modalForm.statusNote = target.value;
+          } else if (state.modalForm && target.id === "modal-observacoes") {
+            state.modalForm.observacoes = target.value;
+          } else if (target.id === "task-search-input") {
             const pos = target.selectionStart;
             state.search = target.value;
             render();
@@ -3999,19 +4110,20 @@
           e.preventDefault();
           const form = e.target;
           if (form.id === "modal-task-form" && state.modalTask) {
-            const titulo = document.getElementById("modal-titulo").value.trim();
+            const base = state.modalTask;
+            const f = state.modalForm || createModalFormDraft(base);
+            const titulo = String(document.getElementById("modal-titulo")?.value ?? f.titulo).trim();
             if (!titulo) return;
-            const descricao = document.getElementById("modal-descricao").value.trim();
+            const descricao = String(document.getElementById("modal-descricao")?.value ?? f.descricao).trim();
             const solicitanteNomeEl = document.getElementById("modal-solicitante-nome");
             const solicitanteEmailEl = document.getElementById("modal-solicitante-email");
-            const solicitanteNomeVal = solicitanteNomeEl ? solicitanteNomeEl.value.trim() : "";
-            const solicitanteEmailVal = solicitanteEmailEl ? solicitanteEmailEl.value.trim() : "";
-            const prazoVal = document.getElementById("modal-prazo").value.trim();
-            const urgencia = document.getElementById("modal-urgencia").value;
-            const status = document.getElementById("modal-status").value;
-            const cleanStatusNote = document.getElementById("modal-status-note").value.trim();
-            const cleanObs = document.getElementById("modal-observacoes").value.trim();
-            const base = state.modalTask;
+            const solicitanteNomeVal = String(solicitanteNomeEl ? solicitanteNomeEl.value : f.solicitante_nome).trim();
+            const solicitanteEmailVal = String(solicitanteEmailEl ? solicitanteEmailEl.value : f.solicitante_email).trim();
+            const prazoVal = String(document.getElementById("modal-prazo")?.value ?? f.prazo).trim();
+            const urgencia = String(document.getElementById("modal-urgencia")?.value ?? f.urgencia);
+            const status = String(document.getElementById("modal-status")?.value ?? f.status);
+            const cleanStatusNote = String(document.getElementById("modal-status-note")?.value ?? f.statusNote).trim();
+            const cleanObs = String(document.getElementById("modal-observacoes")?.value ?? f.observacoes).trim();
             const prevStatusNote = String(base.statusNote || "").trim();
             const prevObs = String(base.observacoes || "").trim();
             let syncedNote;
@@ -4071,6 +4183,7 @@
               state.tasks = state.tasks.map((t) => (t.id === updated.id ? updated : t));
             }
             state.modalTask = null;
+            state.modalForm = null;
             state.openModalPickerType = null;
             state.pickerNewDraft = "";
             state.modalRotulos = [];
@@ -4151,6 +4264,7 @@
             }
             if (state.modalTask) {
               state.modalTask = null;
+              state.modalForm = null;
               render();
             }
           }
