@@ -72,6 +72,32 @@
       .animate-card-details {
         animation: cardDetailsFadeIn 0.18s ease-out;
       }
+      @media print {
+        @page {
+          margin: 14mm;
+        }
+        html,
+        html.dark,
+        body {
+          background-color: #ffffff !important;
+          color: #0f172a !important;
+          color-scheme: light !important;
+        }
+        #app {
+          background: #ffffff !important;
+          min-height: 0 !important;
+          display: block !important;
+        }
+        .no-print {
+          display: none !important;
+        }
+        .print-only {
+          display: block !important;
+        }
+        * {
+          box-shadow: none !important;
+        }
+      }
     </style>
   </head>
   <body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 antialiased transition-colors">
@@ -499,7 +525,7 @@
           return `${yyyy}-${mm}-${dd}`;
         }
 
-        function renderDeadlineBadge(isoDate, isCompleted) {
+        function getDeadlineBadgeMeta(isoDate, isCompleted) {
           const trimmed = String(isoDate ?? "").trim();
           const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
 
@@ -543,11 +569,56 @@
             }
           }
 
-          return `<span title="${escapeHtml(trimmed)}"
-            class="inline-flex items-center gap-1 px-2 py-0.5 border rounded-md font-mono tabular-nums text-xs whitespace-nowrap shrink-0 ${containerClass}">
-            <i data-lucide="calendar" class="w-3.5 h-3.5 shrink-0 ${iconClass}"></i>
-            <span>${escapeHtml(text)}</span>
-          </span>`;
+          return { trimmed, text, containerClass, iconClass };
+        }
+
+        function renderInlineDeadlineBadge(isoDate, isCompleted, taskId, context) {
+          const meta = getDeadlineBadgeMeta(isoDate, isCompleted);
+          const isOpen = Boolean(
+            state.openDeadlinePicker &&
+              state.openDeadlinePicker.taskId === taskId &&
+              state.openDeadlinePicker.context === context
+          );
+          const sizeCls = context === "panel" ? "px-2.5 py-1 text-xs" : "px-2 py-0.5 text-xs";
+
+          const popoverHtml = isOpen
+            ? `<div data-deadline-popover class="absolute left-0 top-full mt-1.5 z-40 p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg dark:shadow-black/60 flex items-center gap-1.5">
+                <input type="date" data-role="inline-deadline-input" data-id="${escapeHtml(taskId)}"
+                  value="${escapeHtml(meta.trimmed)}" aria-label="Selecionar data de prazo"
+                  class="px-2 py-1 text-xs font-mono text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
+                ${
+                  meta.trimmed
+                    ? `<button type="button" data-action="clear-inline-deadline" data-id="${escapeHtml(taskId)}"
+                        class="px-2 py-1 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:text-red-700 dark:hover:text-red-400 bg-slate-100 dark:bg-slate-800 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition-colors whitespace-nowrap cursor-pointer">
+                        Limpar
+                      </button>`
+                    : ""
+                }
+                <button type="button" data-action="close-inline-deadline" aria-label="Fechar seletor de prazo"
+                  class="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded cursor-pointer">
+                  <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                </button>
+              </div>`
+            : "";
+
+          return `<div class="relative inline-flex items-center" data-deadline-root>
+            <button type="button" data-action="toggle-deadline-picker" data-id="${escapeHtml(
+              taskId
+            )}" data-context="${escapeHtml(context)}"
+              title="${
+                meta.trimmed
+                  ? `Prazo: ${escapeHtml(meta.trimmed)}. Clique para editar`
+                  : "Clique para definir um prazo"
+              }"
+              aria-expanded="${isOpen ? "true" : "false"}"
+              class="inline-flex items-center gap-1 border rounded-md font-mono tabular-nums whitespace-nowrap shrink-0 transition-opacity hover:opacity-85 cursor-pointer ${sizeCls} ${
+                meta.containerClass
+              }">
+              <i data-lucide="calendar" class="w-3.5 h-3.5 shrink-0 ${meta.iconClass}"></i>
+              <span>${escapeHtml(meta.text)}</span>
+            </button>
+            ${popoverHtml}
+          </div>`;
         }
 
         function formatReceivedDateTime(isoDateTime, fallbackDate, emptyFallback = "Sem data") {
@@ -694,6 +765,48 @@
           return normalized.sort((a, b) => a.data_hora.localeCompare(b.data_hora));
         }
 
+        function parseSubtasks(rawSubtasks, taskId) {
+          let list = [];
+          if (Array.isArray(rawSubtasks)) {
+            list = rawSubtasks;
+          } else if (typeof rawSubtasks === "string" && rawSubtasks.trim().startsWith("[")) {
+            try {
+              const parsed = JSON.parse(rawSubtasks);
+              if (Array.isArray(parsed)) list = parsed;
+            } catch {
+              list = [];
+            }
+          }
+          return list
+            .map((item, idx) => {
+              if (typeof item === "string") {
+                const cleaned = item.trim();
+                if (!cleaned) return null;
+                return {
+                  id: `sub-${taskId}-${idx}-${uuid()}`,
+                  titulo: cleaned,
+                  concluida: false,
+                };
+              }
+              if (!item || typeof item !== "object") return null;
+              const titulo = String(
+                item.titulo ?? item.title ?? item.texto ?? item.nome ?? ""
+              ).trim();
+              if (!titulo) return null;
+              const concluida =
+                item.concluida === true ||
+                item.completed === true ||
+                item.done === true ||
+                String(item.concluida ?? "").toLowerCase() === "true";
+              return {
+                id: String(item.id ?? `sub-${taskId}-${idx}-${uuid()}`),
+                titulo,
+                concluida,
+              };
+            })
+            .filter(Boolean);
+        }
+
         function normalizeTask(raw, index) {
           const r = raw || {};
           const id = String(r.id ?? `demanda-${index}-${uuid()}`);
@@ -769,6 +882,7 @@
             observacoes: resolvedObservacoes,
             hasNewMessage: Boolean(r.hasNewMessage ?? r.nova_mensagem ?? false),
             historico_mensagens,
+            subtarefas: parseSubtasks(r.subtarefas ?? r.subtasks, id),
             completed: status === "Concluído",
             completedAt: r.completedAt ? String(r.completedAt) : undefined,
           };
@@ -882,6 +996,14 @@
               ""
           ).trim();
 
+          const subtarefasFinal = (Array.isArray(demanda.subtarefas) ? demanda.subtarefas : [])
+            .map((s) => ({
+              id: String(s.id || `sub-${uuid()}`),
+              titulo: String(s.titulo ?? "").trim(),
+              concluida: Boolean(s.concluida),
+            }))
+            .filter((s) => s.titulo.length > 0);
+
           return {
             ...demanda,
             assunto_original: assuntoLimpo,
@@ -895,6 +1017,7 @@
             motivo_aguardo: syncedNote,
             observacao_status: syncedNote,
             statusNote: syncedNote,
+            subtarefas: subtarefasFinal,
           };
         }
 
@@ -1066,9 +1189,21 @@
           editingObsTaskId: null,
           obsDraft: "",
           openCardPicker: null,
+          openPanelPickerType: null,
           openModalPickerType: null,
+          openDeadlinePicker: null,
           pickerNewDraft: "",
           pendingFocusPickerInput: false,
+          selectedTaskId: null,
+          panelDraft: null,
+          newSubtaskDraft: "",
+          editingSubtaskId: null,
+          editingSubtaskDraft: "",
+          panelToast: null,
+          panelToastTimer: null,
+          isPrintMode: false,
+          selectedPrintIds: [],
+          expandedSubtasks: {},
           expandedCards: {},
           expandedThreads: {},
           savedNoteFeedback: {},
@@ -1268,6 +1403,7 @@
               const historyText = (task.historico_mensagens || [])
                 .map((m) => `${m.remetente_nome} ${m.resumo}`)
                 .join(" ");
+              const subtaskText = (task.subtarefas || []).map((s) => s.titulo).join(" ");
               const haystack = [
                 task.titulo,
                 task.descricao,
@@ -1279,6 +1415,7 @@
                 task.statusNote || "",
                 task.observacoes || "",
                 historyText,
+                subtaskText,
               ]
                 .join(" ")
                 .toLowerCase();
@@ -1386,9 +1523,9 @@
                       isOpen ? "rotate-180 text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-slate-500"
                     }"></i>
                   </button>`
-              : `<button type="button" data-action="toggle-modal-picker" data-type="${escapeHtml(
-                  mode
-                )}" aria-expanded="${isOpen ? "true" : "false"}"
+              : `<button type="button" data-action="${
+                  scope === "panel" ? "toggle-panel-picker" : "toggle-modal-picker"
+                }" data-type="${escapeHtml(mode)}" aria-expanded="${isOpen ? "true" : "false"}"
                   class="w-full min-h-[38px] px-2.5 py-1.5 bg-white dark:bg-slate-800 border rounded-lg flex items-center justify-between gap-2 text-left transition-colors cursor-pointer ${
                     isOpen
                       ? "border-blue-600 ring-2 ring-blue-600/20 dark:border-blue-500"
@@ -1691,6 +1828,644 @@
           `;
         }
 
+        function createPanelDraft(task) {
+          const base = task || {};
+          return {
+            taskId: base.id || null,
+            titulo: String(base.titulo ?? ""),
+            assunto: String(base.assunto_normalizado || base.assunto_original || ""),
+            descricao: String(base.descricao ?? ""),
+            solicitante_nome: String(base.solicitante_nome ?? ""),
+            solicitante_email: String(base.solicitante_email ?? ""),
+            statusNote: String(base.statusNote ?? base.motivo_aguardo ?? ""),
+            observacoes: String(base.observacoes ?? ""),
+          };
+        }
+
+        function flashPanelToast(taskId, text) {
+          state.panelToast = { taskId, text };
+          if (state.panelToastTimer) {
+            window.clearTimeout(state.panelToastTimer);
+          }
+          render();
+          state.panelToastTimer = window.setTimeout(() => {
+            if (state.panelToast && state.panelToast.taskId === taskId) {
+              state.panelToast = null;
+              render();
+            }
+          }, 2400);
+        }
+
+        function isPanelDraftDirty(task) {
+          if (!task || !state.panelDraft || state.panelDraft.taskId !== task.id) return false;
+          const d = state.panelDraft;
+          return (
+            d.titulo.trim() !== String(task.titulo ?? "").trim() ||
+            d.assunto.trim() !==
+              String(task.assunto_normalizado || task.assunto_original || "").trim() ||
+            d.descricao.trim() !== String(task.descricao ?? "").trim() ||
+            d.solicitante_nome.trim() !== String(task.solicitante_nome ?? "").trim() ||
+            d.solicitante_email.trim() !== String(task.solicitante_email ?? "").trim() ||
+            d.statusNote.trim() !==
+              String(task.statusNote ?? task.motivo_aguardo ?? "").trim() ||
+            d.observacoes.trim() !== String(task.observacoes ?? "").trim()
+          );
+        }
+
+        function commitPanelTextFields(taskId, toastMessage = "Alterações salvas") {
+          const task = state.tasks.find((t) => t.id === taskId);
+          if (!task || !state.panelDraft || state.panelDraft.taskId !== taskId) return;
+          const d = state.panelDraft;
+          const cleanTitle = d.titulo.trim() || task.titulo;
+          const rawAssunto = d.assunto.trim();
+          const cleanAssunto =
+            normalizeEmailSubject(rawAssunto) || rawAssunto || "Sem assunto";
+          const cleanDesc = d.descricao.trim();
+          const cleanSolNome = d.solicitante_nome.trim() || "Solicitante";
+          const cleanSolEmail = d.solicitante_email.trim();
+          const cleanStatusNote = d.statusNote.trim();
+          const cleanObs = d.observacoes.trim();
+          const prevStatusNote = String(
+            task.statusNote ?? task.motivo_aguardo ?? ""
+          ).trim();
+          const prevObs = String(task.observacoes ?? "").trim();
+
+          let syncedNote;
+          if (cleanStatusNote !== prevStatusNote && cleanObs === prevObs) {
+            syncedNote = cleanStatusNote || undefined;
+          } else if (cleanObs !== prevObs && cleanStatusNote === prevStatusNote) {
+            syncedNote = cleanObs || undefined;
+          } else {
+            syncedNote = cleanObs || cleanStatusNote || undefined;
+          }
+
+          const updated = {
+            ...task,
+            titulo: cleanTitle,
+            assunto_original: cleanAssunto,
+            assunto_normalizado: cleanAssunto,
+            descricao: cleanDesc,
+            solicitante_nome: cleanSolNome,
+            solicitante_email: cleanSolEmail,
+            statusNote: syncedNote,
+            motivo_aguardo: syncedNote,
+            observacao_status: syncedNote,
+            observacoes: syncedNote,
+          };
+
+          state.panelDraft = createPanelDraft(updated);
+          state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+          void persistDemand(updated).then((ok) => {
+            if (ok) flashPanelToast(taskId, toastMessage);
+          });
+        }
+
+        function updateTaskSubtasks(taskId, nextSubtasks) {
+          const task = state.tasks.find((t) => t.id === taskId);
+          if (!task) return;
+          markTaskAsViewed(taskId);
+          const updated = { ...task, subtarefas: nextSubtasks };
+          state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+          void persistDemand(updated);
+        }
+
+        function addSubtaskToTask(taskId) {
+          const cleaned = state.newSubtaskDraft.trim();
+          if (!cleaned) return;
+          const task = state.tasks.find((t) => t.id === taskId);
+          if (!task) return;
+          const current = Array.isArray(task.subtarefas) ? task.subtarefas : [];
+          const next = [
+            ...current,
+            { id: `sub-${uuid()}`, titulo: cleaned, concluida: false },
+          ];
+          state.newSubtaskDraft = "";
+          updateTaskSubtasks(taskId, next);
+        }
+
+        function toggleSubtaskOnTask(taskId, subtaskId) {
+          const task = state.tasks.find((t) => t.id === taskId);
+          if (!task) return;
+          const current = Array.isArray(task.subtarefas) ? task.subtarefas : [];
+          const next = current.map((s) =>
+            s.id === subtaskId ? { ...s, concluida: !s.concluida } : s
+          );
+          updateTaskSubtasks(taskId, next);
+        }
+
+        function deleteSubtaskOnTask(taskId, subtaskId) {
+          const task = state.tasks.find((t) => t.id === taskId);
+          if (!task) return;
+          const current = Array.isArray(task.subtarefas) ? task.subtarefas : [];
+          const next = current.filter((s) => s.id !== subtaskId);
+          updateTaskSubtasks(taskId, next);
+        }
+
+        function commitEditSubtask(taskId, subtaskId) {
+          const cleaned = state.editingSubtaskDraft.trim();
+          state.editingSubtaskId = null;
+          state.editingSubtaskDraft = "";
+          if (!cleaned) {
+            render();
+            return;
+          }
+          const task = state.tasks.find((t) => t.id === taskId);
+          if (!task) {
+            render();
+            return;
+          }
+          const current = Array.isArray(task.subtarefas) ? task.subtarefas : [];
+          const existing = current.find((s) => s.id === subtaskId);
+          if (existing && existing.titulo === cleaned) {
+            render();
+            return;
+          }
+          const next = current.map((s) =>
+            s.id === subtaskId ? { ...s, titulo: cleaned } : s
+          );
+          updateTaskSubtasks(taskId, next);
+        }
+
+        function renderTaskDetailPanel(task, availableLabels, availableCategories) {
+          if (!task) return "";
+          if (!state.panelDraft || state.panelDraft.taskId !== task.id) {
+            state.panelDraft = createPanelDraft(task);
+          }
+          const d = state.panelDraft;
+          const currentStatus = task.status ?? (task.completed ? "Concluído" : "A Fazer");
+          const isCompleted = currentStatus === "Concluído";
+          const taskLabels = getTaskLabels(task);
+          const taskCategories = getTaskCategories(task);
+          const subtasks = Array.isArray(task.subtarefas) ? task.subtarefas : [];
+          const completedSubtasks = subtasks.filter((s) => s.concluida).length;
+          const historyList = task.historico_mensagens || [];
+          const isDirty = isPanelDraftDirty(task);
+          const toastText =
+            state.panelToast && state.panelToast.taskId === task.id
+              ? state.panelToast.text
+              : null;
+
+          const statusOptionsHtml = TASK_STATUS_OPTIONS.map(
+            (opt) =>
+              `<option value="${escapeHtml(opt)}" ${
+                currentStatus === opt ? "selected" : ""
+              }>${escapeHtml(opt)}</option>`
+          ).join("");
+
+          const urgencyOptionsHtml = ["Alta", "Média", "Baixa"]
+            .map(
+              (u) =>
+                `<option value="${u}" ${
+                  task.urgencia === u ? "selected" : ""
+                }>${u}</option>`
+            )
+            .join("");
+
+          const subtasksHtml =
+            subtasks.length === 0
+              ? `<p class="text-xs text-slate-400 dark:text-slate-500 py-1">Nenhuma subtarefa cadastrada.</p>`
+              : `<ul class="space-y-1.5">
+                  ${subtasks
+                    .map((sub) => {
+                      const isEditingSub = state.editingSubtaskId === sub.id;
+                      return `<li class="group flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/70">
+                        <input type="checkbox" data-role="panel-subtask-checkbox" data-id="${escapeHtml(
+                          task.id
+                        )}" data-sub-id="${escapeHtml(sub.id)}" ${
+                        sub.concluida ? "checked" : ""
+                      } aria-label="Marcar subtarefa ${escapeHtml(sub.titulo)}"
+                          class="h-3.5 w-3.5 rounded border-slate-300 dark:border-slate-600 text-blue-700 focus:ring-blue-600 cursor-pointer shrink-0" />
+                        ${
+                          isEditingSub
+                            ? `<input type="text" data-role="edit-subtask-input" data-id="${escapeHtml(
+                                task.id
+                              )}" data-sub-id="${escapeHtml(sub.id)}" value="${escapeHtml(
+                                state.editingSubtaskDraft
+                              )}"
+                                class="flex-1 min-w-0 px-2 py-0.5 text-xs text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-900 border border-blue-500 rounded focus:outline-none" />`
+                            : `<span data-action="start-edit-subtask" data-id="${escapeHtml(
+                                task.id
+                              )}" data-sub-id="${escapeHtml(
+                                sub.id
+                              )}" title="Clique para editar" class="flex-1 min-w-0 text-xs leading-snug break-words cursor-pointer ${
+                                sub.concluida
+                                  ? "line-through text-slate-400 dark:text-slate-500"
+                                  : "text-slate-800 dark:text-slate-200"
+                              }">${escapeHtml(sub.titulo)}</span>`
+                        }
+                        <div class="flex items-center gap-0.5 shrink-0">
+                          ${
+                            !isEditingSub
+                              ? `<button type="button" data-action="start-edit-subtask" data-id="${escapeHtml(
+                                  task.id
+                                )}" data-sub-id="${escapeHtml(sub.id)}" aria-label="Editar subtarefa"
+                                  class="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded cursor-pointer">
+                                  <i data-lucide="pencil" class="w-3 h-3"></i>
+                                </button>`
+                              : ""
+                          }
+                          <button type="button" data-action="delete-subtask" data-id="${escapeHtml(
+                            task.id
+                          )}" data-sub-id="${escapeHtml(sub.id)}" aria-label="Remover subtarefa"
+                            class="p-1 text-slate-400 hover:text-red-700 dark:hover:text-red-400 rounded cursor-pointer">
+                            <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                          </button>
+                        </div>
+                      </li>`;
+                    })
+                    .join("")}
+                </ul>`;
+
+          const historyHtml =
+            historyList.length === 0
+              ? `<p class="text-xs text-slate-400 dark:text-slate-500">Nenhuma mensagem registrada nesta conversa.</p>`
+              : `<div class="divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50/50 dark:bg-slate-800/30">
+                  ${historyList
+                    .map(
+                      (msg) => `
+                    <div class="px-3 py-2.5 text-xs space-y-1">
+                      <div class="flex flex-wrap items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
+                        <span class="font-medium text-slate-800 dark:text-slate-200">${escapeHtml(
+                          msg.remetente_nome
+                        )}${msg.remetente_email ? ` (${escapeHtml(msg.remetente_email)})` : ""}</span>
+                        <span class="font-mono tabular-nums text-[11px]">${escapeHtml(
+                          formatReceivedDateTime(msg.data_hora, undefined, "Sem data")
+                        )}</span>
+                      </div>
+                      <p class="text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line">${escapeHtml(
+                        msg.resumo
+                      )}</p>
+                    </div>
+                  `
+                    )
+                    .join("")}
+                </div>`;
+
+          const panelInner = `
+            <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-col h-full lg:max-h-[calc(100vh-8.5rem)] overflow-hidden">
+              <div class="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
+                <div class="min-w-0 flex items-center gap-2">
+                  ${renderUrgencyIndicator(task.urgencia)}
+                  ${
+                    toastText
+                      ? `<span class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                          <i data-lucide="check" class="w-3 h-3"></i>
+                          <span>${escapeHtml(toastText)}</span>
+                        </span>`
+                      : ""
+                  }
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <button type="button" data-action="save-panel-details" data-id="${escapeHtml(task.id)}"
+                    class="${
+                      isDirty ? "inline-flex" : "hidden"
+                    } items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap cursor-pointer" data-role="panel-save-btn">
+                    <i data-lucide="save" class="w-3.5 h-3.5"></i>
+                    <span>Salvar</span>
+                  </button>
+                  <button type="button" data-action="request-delete-task" data-id="${escapeHtml(task.id)}"
+                    aria-label="Excluir demanda" title="Excluir demanda"
+                    class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-700 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/50 rounded-lg transition-colors cursor-pointer">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                  </button>
+                  <button type="button" data-action="close-detail-panel"
+                    aria-label="Fechar painel de detalhes" title="Fechar painel"
+                    class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="flex-1 overflow-y-auto p-5 space-y-5">
+                ${
+                  task.hasNewMessage
+                    ? `<div class="px-3 py-2 bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800/70 rounded-lg flex items-center justify-between gap-2">
+                        <span class="inline-flex items-center gap-2 text-xs font-semibold text-blue-800 dark:text-blue-300">
+                          <i data-lucide="bell-ring" class="w-3.5 h-3.5 shrink-0"></i>
+                          <span>Nova mensagem na conversa</span>
+                        </span>
+                        <button type="button" data-action="mark-seen" data-id="${escapeHtml(task.id)}"
+                          class="inline-flex items-center gap-1 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline whitespace-nowrap cursor-pointer">
+                          <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                          <span>Marcar como vista</span>
+                        </button>
+                      </div>`
+                    : ""
+                }
+
+                <div class="space-y-3">
+                  <div>
+                    <label for="detail-task-titulo" class="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">Título da demanda</label>
+                    <input id="detail-task-titulo" type="text" data-role="panel-field" data-field="titulo" data-id="${escapeHtml(
+                      task.id
+                    )}" value="${escapeHtml(d.titulo)}"
+                      class="w-full px-3 py-2 text-sm font-semibold text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label for="detail-task-status" class="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">Status</label>
+                      <select id="detail-task-status" data-role="task-status-select" data-id="${escapeHtml(task.id)}"
+                        class="w-full px-2.5 py-1.5 text-xs font-medium text-slate-800 dark:text-slate-100 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
+                        ${statusOptionsHtml}
+                      </select>
+                    </div>
+                    <div>
+                      <label for="detail-task-urgencia" class="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">Urgência</label>
+                      <select id="detail-task-urgencia" data-role="panel-urgency-select" data-id="${escapeHtml(task.id)}"
+                        class="w-full px-2.5 py-1.5 text-xs font-medium text-slate-800 dark:text-slate-100 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
+                        ${urgencyOptionsHtml}
+                      </select>
+                    </div>
+                    <div>
+                      <span class="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">Prazo</span>
+                      ${renderInlineDeadlineBadge(task.prazo, isCompleted, task.id, "panel")}
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <span class="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">Rótulos</span>
+                      ${renderCheckboxPopover({
+                        scope: "panel",
+                        taskId: task.id,
+                        mode: "label",
+                        selected: taskLabels,
+                        options: availableLabels,
+                        isOpen: state.openPanelPickerType === "label",
+                      })}
+                    </div>
+                    <div>
+                      <span class="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">Categorias</span>
+                      ${renderCheckboxPopover({
+                        scope: "panel",
+                        taskId: task.id,
+                        mode: "category",
+                        selected: taskCategories,
+                        options: availableCategories,
+                        isOpen: state.openPanelPickerType === "category",
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                  <div>
+                    <label for="detail-task-descricao" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Descrição completa</label>
+                    <textarea id="detail-task-descricao" rows="3" data-role="panel-field" data-field="descricao" data-id="${escapeHtml(
+                      task.id
+                    )}" placeholder="Resumo ou detalhamento da demanda..."
+                      class="w-full px-3 py-2 text-xs text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg resize-y leading-relaxed focus:outline-none focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500">${escapeHtml(
+                        d.descricao
+                      )}</textarea>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label for="detail-task-sol-nome" class="flex items-center gap-1 text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        <i data-lucide="user" class="w-3.5 h-3.5 text-slate-400"></i>
+                        <span>Solicitante (Nome)</span>
+                      </label>
+                      <input id="detail-task-sol-nome" type="text" data-role="panel-field" data-field="solicitante_nome" data-id="${escapeHtml(
+                        task.id
+                      )}" value="${escapeHtml(d.solicitante_nome)}"
+                        class="w-full px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
+                    </div>
+                    <div>
+                      <label for="detail-task-sol-email" class="flex items-center gap-1 text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        <i data-lucide="mail" class="w-3.5 h-3.5 text-slate-400"></i>
+                        <span>E-mail do solicitante</span>
+                      </label>
+                      <input id="detail-task-sol-email" type="text" inputMode="email" data-role="panel-field" data-field="solicitante_email" data-id="${escapeHtml(
+                        task.id
+                      )}" value="${escapeHtml(d.solicitante_email)}" placeholder="nome@empresa.com.br"
+                        class="w-full px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label for="detail-task-assunto" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Assunto do e-mail</label>
+                    <input id="detail-task-assunto" type="text" data-role="panel-field" data-field="assunto" data-id="${escapeHtml(
+                      task.id
+                    )}" value="${escapeHtml(d.assunto)}"
+                      class="w-full px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
+                    <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                      Recebido em ${escapeHtml(
+                        formatReceivedDateTime(
+                          task.data_hora_email_original,
+                          task.data_email_original,
+                          "Sem data"
+                        )
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                <div class="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                  ${
+                    currentStatus === "Aguardando"
+                      ? `<div>
+                          <div class="flex items-center justify-between gap-2 mb-1">
+                            <label for="detail-waiting-note" class="flex items-center gap-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
+                              <i data-lucide="message-square-text" class="w-3.5 h-3.5"></i>
+                              <span>Motivo / pendência em aguardo</span>
+                            </label>
+                            <button type="button" data-action="save-panel-waiting" data-id="${escapeHtml(task.id)}"
+                              class="text-[11px] font-medium text-amber-800 dark:text-amber-300 hover:underline cursor-pointer">
+                              Salvar motivo
+                            </button>
+                          </div>
+                          <input id="detail-waiting-note" type="text" data-role="panel-field" data-field="statusNote" data-id="${escapeHtml(
+                            task.id
+                          )}" value="${escapeHtml(d.statusNote)}" placeholder="Ex: Aguardando retorno da área jurídica..."
+                            class="w-full px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 bg-amber-50/50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 rounded-lg placeholder:text-amber-700/60 dark:placeholder:text-amber-400/50 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-600" />
+                        </div>`
+                      : ""
+                  }
+
+                  <div>
+                    <label for="detail-observacoes" class="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      <i data-lucide="notebook-pen" class="w-3.5 h-3.5 text-slate-400"></i>
+                      <span>Observações e acompanhamento</span>
+                    </label>
+                    <textarea id="detail-observacoes" rows="2" data-role="panel-field" data-field="observacoes" data-id="${escapeHtml(
+                      task.id
+                    )}" placeholder="Anotações de andamento, tratativas ou histórico interno..."
+                      class="w-full px-3 py-2 text-xs text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg resize-y placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500">${escapeHtml(
+                        d.observacoes
+                      )}</textarea>
+                  </div>
+                </div>
+
+                <div class="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+                  <div class="flex items-center justify-between gap-2">
+                    <h4 class="flex items-center gap-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200">
+                      <i data-lucide="list-checks" class="w-4 h-4 text-slate-500 dark:text-slate-400"></i>
+                      <span>Subtarefas</span>
+                    </h4>
+                    ${
+                      subtasks.length > 0
+                        ? `<span class="font-mono tabular-nums text-[11px] font-medium text-slate-500 dark:text-slate-400">${completedSubtasks}/${subtasks.length} concluídas</span>`
+                        : ""
+                    }
+                  </div>
+
+                  <div class="flex items-center gap-2">
+                    <input id="panel-new-subtask-input" type="text" data-id="${escapeHtml(
+                      task.id
+                    )}" value="${escapeHtml(state.newSubtaskDraft)}"
+                      placeholder="Adicionar nova subtarefa..." aria-label="Adicionar nova subtarefa"
+                      class="flex-1 min-w-0 px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
+                    <button type="button" data-action="add-subtask" data-id="${escapeHtml(task.id)}"
+                      class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                      <span>Adicionar</span>
+                    </button>
+                  </div>
+
+                  ${subtasksHtml}
+                </div>
+
+                <div class="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+                  <h4 class="flex items-center gap-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200">
+                    <i data-lucide="messages-square" class="w-4 h-4 text-slate-500 dark:text-slate-400"></i>
+                    <span class="tabular-nums">Histórico da conversa (${historyList.length} ${
+                      historyList.length === 1 ? "mensagem" : "mensagens"
+                    })</span>
+                  </h4>
+                  ${historyHtml}
+                </div>
+              </div>
+            </div>
+          `;
+
+          return `
+            <aside aria-label="Detalhes da demanda" class="hidden lg:block lg:sticky lg:top-6">
+              ${panelInner}
+            </aside>
+            <div class="fixed inset-0 z-50 lg:hidden flex justify-end" role="dialog" aria-modal="true" aria-label="Detalhes da demanda">
+              <div data-action="close-detail-panel" class="fixed inset-0 bg-slate-900/45 dark:bg-slate-950/75"></div>
+              <div class="relative z-10 w-full max-w-lg h-full p-3 sm:p-4">${panelInner}</div>
+            </div>
+          `;
+        }
+
+        function renderPrintableSheet() {
+          const idSet = new Set(state.selectedPrintIds);
+          const selected = state.tasks.filter((t) => idSet.has(t.id));
+          const printedAt = new Date().toLocaleDateString("pt-BR", {
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+
+          const cardsHtml =
+            selected.length === 0
+              ? `<p class="text-sm text-slate-600">Nenhuma demanda selecionada para impressão.</p>`
+              : `<div class="space-y-4">
+                  ${selected
+                    .map((task, idx) => {
+                      const status = task.status ?? (task.completed ? "Concluído" : "A Fazer");
+                      const prazoText = formatDisplayDate(task.prazo, "Sem prazo");
+                      const rotulos = getTaskLabels(task);
+                      const categorias = getTaskCategories(task);
+                      const subtasks = Array.isArray(task.subtarefas) ? task.subtarefas : [];
+                      const notes = String(
+                        task.observacoes ?? task.motivo_aguardo ?? task.statusNote ?? ""
+                      ).trim();
+
+                      return `<article class="border border-slate-300 rounded-md p-3.5 break-inside-avoid">
+                        <div class="flex items-start justify-between gap-3 mb-2">
+                          <h2 class="text-sm font-bold text-slate-900 leading-snug">${idx + 1}. ${escapeHtml(
+                            task.titulo
+                          )}</h2>
+                          <span class="text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 border border-slate-400 rounded shrink-0">${escapeHtml(
+                            status
+                          )}</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-700 mb-2">
+                          <div><span class="font-semibold text-slate-900">Prazo: </span><span class="font-mono tabular-nums">${escapeHtml(
+                            prazoText
+                          )}</span></div>
+                          <div><span class="font-semibold text-slate-900">Urgência: </span><span>${escapeHtml(
+                            task.urgencia
+                          )}</span></div>
+                          <div class="col-span-2"><span class="font-semibold text-slate-900">Solicitante: </span><span>${escapeHtml(
+                            task.solicitante_nome
+                          )}${
+                        task.solicitante_email ? ` (${escapeHtml(task.solicitante_email)})` : ""
+                      }</span></div>
+                          <div class="col-span-2"><span class="font-semibold text-slate-900">Rótulos: </span><span>${escapeHtml(
+                            rotulos.join(", ")
+                          )}</span><span class="mx-2 text-slate-400">|</span><span class="font-semibold text-slate-900">Categorias: </span><span>${escapeHtml(
+                        categorias.join(", ")
+                      )}</span></div>
+                        </div>
+                        ${
+                          task.descricao
+                            ? `<p class="text-xs text-slate-800 leading-relaxed whitespace-pre-line mb-2">${escapeHtml(
+                                task.descricao
+                              )}</p>`
+                            : ""
+                        }
+                        ${
+                          subtasks.length > 0
+                            ? `<div class="mt-2 pt-2 border-t border-slate-200">
+                                <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-700 mb-1">
+                                  Subtarefas (${subtasks.filter((s) => s.concluida).length}/${subtasks.length})
+                                </div>
+                                <ul class="space-y-1">
+                                  ${subtasks
+                                    .map(
+                                      (sub) => `<li class="flex items-start gap-2 text-xs text-slate-800">
+                                        <span class="font-mono text-slate-900 shrink-0">${
+                                          sub.concluida ? "[x]" : "[ ]"
+                                        }</span>
+                                        <span class="${
+                                          sub.concluida ? "line-through text-slate-500" : ""
+                                        }">${escapeHtml(sub.titulo)}</span>
+                                      </li>`
+                                    )
+                                    .join("")}
+                                </ul>
+                              </div>`
+                            : ""
+                        }
+                        ${
+                          notes
+                            ? `<div class="mt-2 pt-2 border-t border-slate-200 text-xs text-slate-800">
+                                <span class="font-semibold text-slate-900">${
+                                  status === "Aguardando" ? "Motivo / Observações: " : "Observações: "
+                                }</span>
+                                <span class="whitespace-pre-line">${escapeHtml(notes)}</span>
+                              </div>`
+                            : ""
+                        }
+                      </article>`;
+                    })
+                    .join("")}
+                </div>`;
+
+          return `
+            <section aria-label="Folha de impressão das demandas selecionadas" class="bg-white text-slate-900 p-6 max-w-4xl mx-auto">
+              <header class="pb-4 mb-5 border-b-2 border-slate-900 flex items-baseline justify-between gap-4">
+                <div>
+                  <h1 class="text-lg font-bold tracking-tight text-slate-900">Triagem Executiva — Demandas Selecionadas</h1>
+                  <p class="text-xs text-slate-600 mt-0.5">Total selecionado: ${selected.length} ${
+                    selected.length === 1 ? "demanda" : "demandas"
+                  }</p>
+                </div>
+                <span class="text-xs font-mono tabular-nums text-slate-600">Impresso em ${escapeHtml(
+                  printedAt
+                )}</span>
+              </header>
+              ${cardsHtml}
+            </section>
+          `;
+        }
+
         function renderTasksView() {
           if (state.isInitialLoading) {
             return `
@@ -1750,6 +2525,11 @@
           const activeLabelFilter = getActiveLabelFilter(availableLabels);
           const activeCategoryFilter = getActiveCategoryFilter(availableCategories);
           const filtered = getFilteredTasks();
+          const selectedTask = state.selectedTaskId
+            ? state.tasks.find((t) => t.id === state.selectedTaskId) || null
+            : null;
+          const showSplitDetail = Boolean(selectedTask) && !state.isPrintMode;
+          const printSelectedSet = new Set(state.selectedPrintIds);
 
           const statusTabsHtml = STATUS_FILTER_OPTIONS.map((st) => {
             const active = state.statusFilter === st;
@@ -1775,6 +2555,45 @@
                 }">${lvl}</button>`;
             })
             .join("");
+
+          const printActionBarHtml = state.isPrintMode
+            ? `<div class="pt-2.5 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5 bg-blue-50/70 dark:bg-blue-950/30 -mx-5 -mb-4 px-5 py-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-900 dark:text-blue-200">
+                    <i data-lucide="printer" class="w-3.5 h-3.5"></i>
+                    <span>Seleção para impressão</span>
+                  </span>
+                  <button type="button" data-action="print-select-all" ${
+                    filtered.length === 0 ? "disabled" : ""
+                  }
+                    class="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 whitespace-nowrap cursor-pointer">
+                    <i data-lucide="check-square" class="w-3.5 h-3.5"></i>
+                    <span>Selecionar todas visíveis</span>
+                  </button>
+                  <button type="button" data-action="print-clear-all" ${
+                    state.selectedPrintIds.length === 0 ? "disabled" : ""
+                  }
+                    class="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 whitespace-nowrap cursor-pointer">
+                    <i data-lucide="square" class="w-3.5 h-3.5"></i>
+                    <span>Desmarcar todas</span>
+                  </button>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button type="button" data-action="execute-print" ${
+                    state.selectedPrintIds.length === 0 ? "disabled" : ""
+                  }
+                    class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-40 transition-colors whitespace-nowrap cursor-pointer">
+                    <i data-lucide="printer" class="w-3.5 h-3.5"></i>
+                    <span class="tabular-nums">Imprimir selecionadas (${state.selectedPrintIds.length})</span>
+                  </button>
+                  <button type="button" data-action="cancel-print-mode"
+                    class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors whitespace-nowrap cursor-pointer">
+                    <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                    <span>Cancelar</span>
+                  </button>
+                </div>
+              </div>`
+            : "";
 
           let listHtml = "";
           if (filtered.length === 0) {
@@ -1843,7 +2662,6 @@
                 .map((task) => {
                   const currentStatus = task.status ?? (task.completed ? "Concluído" : "A Fazer");
                   const isCompleted = currentStatus === "Concluído";
-                  const isEditingObs = state.editingObsTaskId === task.id;
                   const isNewDemand = currentStatus === "A Fazer" && !viewedSet.has(task.id);
                   const isLabelPickerOpen = Boolean(
                     state.openCardPicker &&
@@ -1855,182 +2673,35 @@
                       state.openCardPicker.taskId === task.id &&
                       state.openCardPicker.type === "category"
                   );
-                  const historyList = task.historico_mensagens || [];
-                  const isCardExpanded = Boolean(state.expandedCards[task.id]) || isEditingObs;
-                  const isExpanded = Boolean(state.expandedThreads[task.id]);
+                  const taskLabels = getTaskLabels(task);
+                  const taskCategories = getTaskCategories(task);
+                  const subtasks = Array.isArray(task.subtarefas) ? task.subtarefas : [];
+                  const completedSubtasks = subtasks.filter((s) => s.concluida).length;
+                  const isSubtasksExpanded = Boolean(state.expandedSubtasks[task.id]);
+                  const isSelected = !state.isPrintMode && selectedTask && selectedTask.id === task.id;
+                  const isPrintChecked = printSelectedSet.has(task.id);
 
-                  const newDemandBanner =
-                    isNewDemand && !task.hasNewMessage
-                      ? `<div class="mb-2.5 flex flex-wrap items-center justify-between gap-2">
-                          <span class="inline-flex items-center gap-2 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950/60 dark:border-emerald-800/70 rounded-md">
-                            <span class="relative flex h-2 w-2 shrink-0" aria-hidden="true">
-                              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                              <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                            </span>
-                            <span>Novo</span>
-                          </span>
-                          <button type="button" data-action="mark-viewed" data-id="${escapeHtml(task.id)}"
-                            class="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-900 dark:text-emerald-400 dark:hover:text-emerald-300 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
-                            <i data-lucide="check" class="w-3.5 h-3.5"></i>
-                            <span>Marcar como visto</span>
-                          </button>
-                        </div>`
-                      : "";
-
-                  const newMessageBanner = task.hasNewMessage
-                    ? `<div class="mb-2.5 px-3 py-1.5 bg-blue-50 border border-blue-200 dark:bg-blue-950/50 dark:border-blue-800/70 rounded-lg flex flex-wrap items-center justify-between gap-2">
-                        <span class="inline-flex items-center gap-2 text-xs font-semibold text-blue-800 dark:text-blue-200">
-                          <i data-lucide="bell-ring" class="w-3.5 h-3.5 text-blue-700 dark:text-blue-400 shrink-0"></i>
-                          <span>Nova mensagem na conversa</span>
-                          ${
-                            isNewDemand
-                              ? `<span class="inline-flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950/60 dark:border-emerald-800/70 rounded">
-                                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true"></span>
-                                  <span>Novo</span>
-                                </span>`
-                              : ""
-                          }
-                        </span>
-                        <button type="button" data-action="mark-seen" data-id="${escapeHtml(task.id)}"
-                          class="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
-                          <i data-lucide="check" class="w-3.5 h-3.5"></i>
-                          <span>Marcar como visto</span>
-                        </button>
-                      </div>`
-                    : "";
-
-                  const savedFeedbackKind = state.savedNoteFeedback[task.id];
-                  const savedFeedbackHtml = `<span role="status" class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400"><i data-lucide="check" class="w-3 h-3"></i><span>Salvo</span></span>`;
-
-                  const waitingFieldHtml =
-                    currentStatus === "Aguardando"
-                      ? `<div class="pt-0.5 max-w-xl">
-                          <div class="flex items-center justify-between gap-2 mb-1">
-                            <label for="waiting-note-${escapeHtml(task.id)}" class="flex items-center gap-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
-                              <i data-lucide="message-square-text" class="w-3.5 h-3.5 shrink-0"></i>
-                              <span>Motivo / pendência em aguardo</span>
-                            </label>
-                            ${savedFeedbackKind === "waiting" ? savedFeedbackHtml : ""}
-                          </div>
-                          <div class="flex items-center gap-2">
-                            <input id="waiting-note-${escapeHtml(task.id)}" type="text"
-                              data-role="waiting-note" data-id="${escapeHtml(task.id)}"
-                              value="${escapeHtml(task.statusNote || "")}"
-                              placeholder="Aguardando retorno de... (ex: aprovação do jurídico)"
-                              class="flex-1 min-w-0 px-3 py-1.5 text-xs text-slate-900 bg-amber-50/60 border border-amber-200 placeholder:text-amber-700/60 focus:outline-none focus:bg-white focus:ring-2 focus:ring-amber-500/25 focus:border-amber-400 dark:text-slate-100 dark:bg-amber-950/35 dark:border-amber-800/70 dark:placeholder:text-amber-300/60 dark:focus:bg-slate-950 dark:focus:border-amber-500 rounded-lg" />
-                            <button type="button" data-action="save-waiting-note" data-waiting-action="save" data-id="${escapeHtml(task.id)}"
-                              class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-amber-700 dark:bg-amber-600 rounded-lg hover:bg-amber-800 dark:hover:bg-amber-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                              <i data-lucide="check" class="w-3.5 h-3.5"></i>
-                              <span>Salvar motivo</span>
-                            </button>
-                          </div>
-                        </div>`
-                      : task.statusNote
-                      ? `<div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                          <i data-lucide="message-square-text" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0"></i>
-                          <span>Pendência registrada: ${escapeHtml(task.statusNote)}</span>
-                        </div>`
-                      : "";
-
-                  let obsHtml = "";
-                  if (isEditingObs) {
-                    obsHtml = `
-                      <div class="space-y-1.5">
-                        <label for="obs-input-${escapeHtml(task.id)}" class="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-300">
-                          <i data-lucide="notebook-pen" class="w-3.5 h-3.5 text-blue-700 dark:text-blue-400 shrink-0"></i>
-                          <span>Observações e acompanhamento</span>
-                        </label>
-                        <div class="flex items-center gap-2">
-                          <input id="obs-input-${escapeHtml(task.id)}" type="text"
-                            data-role="obs-input" data-id="${escapeHtml(task.id)}"
-                            value="${escapeHtml(state.obsDraft)}"
-                            placeholder="Ex: Alinhado com Carlos em 17/11; aguardando versão final..."
-                            class="flex-1 min-w-0 px-3 py-1.5 text-xs text-slate-900 bg-white border border-blue-300 dark:text-slate-100 dark:bg-slate-950 dark:border-blue-600 dark:placeholder:text-slate-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
-                          <button type="button" data-action="save-obs" data-id="${escapeHtml(task.id)}"
-                            class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                            <i data-lucide="check" class="w-3.5 h-3.5"></i>
-                            <span>Salvar</span>
-                          </button>
-                          <button type="button" data-action="cancel-obs" data-obs-action="cancel"
-                            aria-label="Cancelar edição da observação"
-                            class="p-1.5 text-slate-500 hover:text-slate-800 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 dark:text-slate-400 dark:hover:text-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 transition-colors cursor-pointer">
-                            <i data-lucide="x" class="w-3.5 h-3.5"></i>
-                          </button>
-                        </div>
-                      </div>
-                    `;
-                  } else if (task.observacoes) {
-                    obsHtml = `
-                      <div class="flex items-start gap-2 px-3 py-2 bg-slate-50 border border-slate-200/80 dark:bg-slate-800/70 dark:border-slate-700/80 rounded-lg text-xs text-slate-700 dark:text-slate-300">
-                        <i data-lucide="notebook-pen" class="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 mt-0.5 shrink-0"></i>
-                        <div class="min-w-0 flex-1 leading-relaxed">
-                          <span class="font-medium text-slate-800 dark:text-slate-100">Observações: </span>
-                          <span>${escapeHtml(task.observacoes)}</span>
-                        </div>
-                        <div class="flex items-center gap-2 shrink-0">
-                          ${savedFeedbackKind === "obs" ? savedFeedbackHtml : ""}
-                          <button type="button" data-action="edit-obs" data-id="${escapeHtml(task.id)}"
-                            class="text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline whitespace-nowrap shrink-0 cursor-pointer">
-                            Editar nota
-                          </button>
-                        </div>
-                      </div>
-                    `;
-                  } else {
-                    obsHtml = `
-                      <div class="flex items-center gap-3">
-                        <button type="button" data-action="edit-obs" data-id="${escapeHtml(task.id)}"
-                          class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-blue-700 dark:text-slate-400 dark:hover:text-blue-400 transition-colors cursor-pointer">
-                          <i data-lucide="notebook-pen" class="w-3.5 h-3.5"></i>
-                          <span>Adicionar observação</span>
-                        </button>
-                        ${savedFeedbackKind === "obs" ? savedFeedbackHtml : ""}
-                      </div>
-                    `;
+                  let rowClass = "hover:bg-slate-50/80 dark:hover:bg-slate-800/40";
+                  if (state.isPrintMode && isPrintChecked) {
+                    rowClass = "bg-blue-50/60 dark:bg-blue-950/30 ring-1 ring-inset ring-blue-500/40";
+                  } else if (isSelected) {
+                    rowClass = "bg-blue-50/60 dark:bg-blue-950/35 ring-1 ring-inset ring-blue-600/45";
+                  } else if (task.hasNewMessage) {
+                    rowClass = "bg-blue-50/30 dark:bg-blue-950/20 hover:bg-blue-50/50 dark:hover:bg-blue-950/30";
+                  } else if (isNewDemand) {
+                    rowClass = "bg-emerald-50/25 dark:bg-emerald-950/15 hover:bg-emerald-50/45 dark:hover:bg-emerald-950/25";
+                  } else if (isCompleted) {
+                    rowClass = "bg-slate-50/40 dark:bg-slate-900/50 hover:bg-slate-100/50 dark:hover:bg-slate-800/40";
                   }
 
-                  const threadAccordionBtn =
-                    historyList.length > 0
-                      ? `<span aria-hidden="true">·</span>
-                         <button type="button" data-action="toggle-thread" data-id="${escapeHtml(task.id)}"
-                           class="inline-flex items-center gap-1 font-medium text-slate-700 hover:text-blue-700 dark:text-slate-300 dark:hover:text-blue-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                           <i data-lucide="messages-square" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500"></i>
-                           <span class="tabular-nums">${historyList.length} ${
-                             historyList.length === 1 ? "mensagem na conversa" : "mensagens na conversa"
-                           }</span>
-                           <i data-lucide="${isExpanded ? "chevron-up" : "chevron-down"}" class="w-3.5 h-3.5"></i>
-                         </button>`
-                      : "";
-
-                  const threadDrawerHtml =
-                    isExpanded && historyList.length > 0
-                      ? `<div class="mt-2 border border-slate-200 rounded-lg bg-slate-50/70 divide-y divide-slate-200/80 dark:border-slate-700 dark:bg-slate-800/50 dark:divide-slate-700/80 max-w-3xl">
-                          ${historyList
-                            .map(
-                              (msg, idx) => `
-                            <div class="px-3.5 py-2.5 text-xs space-y-1">
-                              <div class="flex flex-wrap items-center justify-between gap-2">
-                                <span class="font-medium text-slate-800 dark:text-slate-200">
-                                  <span class="font-mono tabular-nums text-slate-400 dark:text-slate-500 mr-1.5 font-normal">${String(
-                                    idx + 1
-                                  ).padStart(2, "0")}.</span>
-                                  ${escapeHtml(msg.remetente_nome)}${
-                                    msg.remetente_email ? ` (${escapeHtml(msg.remetente_email)})` : ""
-                                  }
-                                </span>
-                                <span class="font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                                  ${escapeHtml(
-                                    formatReceivedDateTime(msg.data_hora, undefined, "Sem data")
-                                  )}
-                                </span>
-                              </div>
-                              <p class="text-slate-600 dark:text-slate-300 leading-relaxed pl-6">${escapeHtml(msg.resumo)}</p>
-                            </div>
-                          `
-                            )
-                            .join("")}
-                        </div>`
-                      : "";
+                  const statusSelectCls =
+                    currentStatus === "Iniciado"
+                      ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800/70"
+                      : currentStatus === "Aguardando"
+                      ? "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/70"
+                      : currentStatus === "Concluído"
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/70"
+                      : "bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700";
 
                   const statusOptionsHtml = TASK_STATUS_OPTIONS.map(
                     (opt) =>
@@ -2039,40 +2710,75 @@
                       }>${escapeHtml(opt)}</option>`
                   ).join("");
 
-                  const taskLabels = getTaskLabels(task);
-                  const taskCategories = getTaskCategories(task);
-                  const cardSurfaceClass = task.hasNewMessage
-                    ? "border-l-4 border-l-blue-600 bg-blue-50/35 dark:border-l-blue-500 dark:bg-blue-950/20"
-                    : isNewDemand
-                    ? "border-l-4 border-l-emerald-500 bg-emerald-50/20 dark:border-l-emerald-500 dark:bg-emerald-950/15"
-                    : isCompleted
-                    ? "bg-slate-50/40 dark:bg-slate-900/50"
-                    : "";
-
-                  const expandedDetailsHtml = isCardExpanded
-                    ? `<div class="pt-2 space-y-2.5 animate-card-details">
-                        ${
-                          task.descricao
-                            ? `<p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed max-w-3xl whitespace-pre-line">${escapeHtml(
-                                task.descricao
-                              )}</p>`
-                            : ""
-                        }
-                        ${waitingFieldHtml}
-                        <div class="max-w-2xl">${obsHtml}</div>
-                      </div>`
-                    : "";
+                  const inlineSubtasksHtml =
+                    subtasks.length > 0
+                      ? `<div class="pt-0.5 space-y-1.5" data-stop-row>
+                          <button type="button" data-action="toggle-inline-subtasks" data-id="${escapeHtml(
+                            task.id
+                          )}" aria-expanded="${isSubtasksExpanded ? "true" : "false"}"
+                            class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-blue-700 dark:hover:text-blue-400 transition-colors cursor-pointer">
+                            <i data-lucide="list-checks" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0"></i>
+                            <span class="font-mono tabular-nums">${completedSubtasks}/${subtasks.length} subtarefas</span>
+                            <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400 transition-transform ${
+                              isSubtasksExpanded ? "rotate-180" : ""
+                            }"></i>
+                          </button>
+                          ${
+                            isSubtasksExpanded
+                              ? `<ul class="pl-1 space-y-1 border-l-2 border-slate-200 dark:border-slate-700 ml-1.5">
+                                  ${subtasks
+                                    .map(
+                                      (sub) => `<li class="flex items-start gap-2 pl-2 text-xs">
+                                        <input type="checkbox" data-role="inline-subtask-checkbox" data-id="${escapeHtml(
+                                          task.id
+                                        )}" data-sub-id="${escapeHtml(sub.id)}" ${
+                                        sub.concluida ? "checked" : ""
+                                      } aria-label="Marcar subtarefa ${escapeHtml(sub.titulo)}"
+                                          class="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 dark:border-slate-600 text-blue-700 focus:ring-blue-600 cursor-pointer shrink-0" />
+                                        <span data-action="toggle-inline-subtask-label" data-id="${escapeHtml(
+                                          task.id
+                                        )}" data-sub-id="${escapeHtml(sub.id)}"
+                                          class="leading-snug cursor-pointer ${
+                                            sub.concluida
+                                              ? "line-through text-slate-400 dark:text-slate-500"
+                                              : "text-slate-700 dark:text-slate-300"
+                                          }">${escapeHtml(sub.titulo)}</span>
+                                      </li>`
+                                    )
+                                    .join("")}
+                                </ul>`
+                              : ""
+                          }
+                        </div>`
+                      : "";
 
                   return `
-                    <article class="p-4 sm:px-6 transition-colors hover:bg-slate-50/60 dark:hover:bg-slate-800/40 ${cardSurfaceClass}">
-                      ${newDemandBanner}
-                      ${newMessageBanner}
-                      <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                    <article data-action="select-task" data-id="${escapeHtml(task.id)}"
+                      class="px-5 py-3.5 transition-colors cursor-pointer ${rowClass}">
+                      <div class="flex items-start gap-3">
+                        ${
+                          state.isPrintMode
+                            ? `<div class="pt-1 shrink-0" data-stop-row>
+                                <input type="checkbox" data-action="toggle-print-select" data-id="${escapeHtml(
+                                  task.id
+                                )}" ${isPrintChecked ? "checked" : ""}
+                                  aria-label="Selecionar ${escapeHtml(task.titulo)} para impressão"
+                                  class="h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-blue-700 focus:ring-blue-600 cursor-pointer" />
+                              </div>`
+                            : ""
+                        }
                         <div class="min-w-0 flex-1 space-y-2">
                           <div class="flex flex-wrap items-center gap-2">
-                            ${renderStatusBadge(currentStatus)}
-                            ${renderUrgencyIndicator(task.urgencia)}
-                            <span aria-hidden="true" class="text-slate-300 dark:text-slate-600 text-xs">·</span>
+                            <div data-stop-row>
+                              <select data-role="task-status-select" data-id="${escapeHtml(task.id)}"
+                                aria-label="Alterar status de ${escapeHtml(task.titulo)}"
+                                class="px-2 py-0.5 text-xs font-medium rounded-md border focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer ${statusSelectCls}">
+                                ${statusOptionsHtml}
+                              </select>
+                            </div>
+
+                            ${renderInlineDeadlineBadge(task.prazo, isCompleted, task.id, "list")}
+
                             ${renderCheckboxPopover({
                               scope: "card",
                               taskId: task.id,
@@ -2081,7 +2787,7 @@
                               options: availableLabels,
                               isOpen: isLabelPickerOpen,
                             })}
-                            <span aria-hidden="true" class="text-slate-300 dark:text-slate-600 text-xs">·</span>
+
                             ${renderCheckboxPopover({
                               scope: "card",
                               taskId: task.id,
@@ -2090,75 +2796,37 @@
                               options: availableCategories,
                               isOpen: isCategoryPickerOpen,
                             })}
-                            <span aria-hidden="true" class="text-slate-300 dark:text-slate-600 text-xs">·</span>
-                            ${renderDeadlineBadge(task.prazo, isCompleted)}
+
+                            ${
+                              isNewDemand
+                                ? `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/70 rounded-md">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" aria-hidden="true"></span>
+                                    <span>Novo</span>
+                                  </span>`
+                                : ""
+                            }
+
+                            ${
+                              task.hasNewMessage
+                                ? `<button type="button" data-action="mark-seen" data-id="${escapeHtml(
+                                    task.id
+                                  )}" title="Clique para marcar nova mensagem como vista"
+                                    class="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-blue-800 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800/70 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/60 transition-colors cursor-pointer">
+                                    <i data-lucide="bell-ring" class="w-3 h-3 shrink-0"></i>
+                                    <span>Nova mensagem</span>
+                                    <i data-lucide="check" class="w-3 h-3 ml-0.5 opacity-70"></i>
+                                  </button>`
+                                : ""
+                            }
                           </div>
 
-                          <div>
-                            <button type="button" data-action="toggle-card" data-id="${escapeHtml(task.id)}"
-                              aria-expanded="${isCardExpanded ? "true" : "false"}"
-                              class="group w-full flex items-start justify-between gap-2 text-left rounded-md -mx-1.5 px-1.5 py-0.5 hover:bg-slate-100/75 dark:hover:bg-slate-800/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/25 transition-colors cursor-pointer">
-                              <h3 class="text-sm font-semibold leading-snug transition-colors ${
-                                isCompleted
-                                  ? "line-through text-slate-500 dark:text-slate-500"
-                                  : "text-slate-900 group-hover:text-blue-800 dark:text-slate-100 dark:group-hover:text-blue-300"
-                              }">${escapeHtml(task.titulo)}</h3>
-                              <i data-lucide="chevron-down" class="w-4 h-4 shrink-0 mt-0.5 transition-transform duration-200 ${
-                                isCardExpanded
-                                  ? "rotate-180 text-blue-700 dark:text-blue-400"
-                                  : "text-slate-400 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300"
-                              }"></i>
-                            </button>
-                            ${expandedDetailsHtml}
-                          </div>
+                          <h3 class="text-sm font-semibold leading-snug ${
+                            isCompleted
+                              ? "line-through text-slate-500 dark:text-slate-500"
+                              : "text-slate-900 dark:text-slate-100"
+                          }">${escapeHtml(task.titulo)}</h3>
 
-                          <div class="space-y-1 pt-0.5">
-                            <div class="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                              <span>Solicitante: ${escapeHtml(task.solicitante_nome)}</span>
-                              <span aria-hidden="true">·</span>
-                              <span class="inline-flex items-center gap-1 font-mono tabular-nums text-slate-600 dark:text-slate-300">
-                                <i data-lucide="clock" class="w-3 h-3 text-slate-400 dark:text-slate-500"></i>
-                                <span>Recebido em ${escapeHtml(
-                                  formatReceivedDateTime(
-                                    task.data_hora_email_original,
-                                    task.data_email_original,
-                                    "Sem data"
-                                  )
-                                )}</span>
-                              </span>
-                              ${threadAccordionBtn}
-                            </div>
-
-                            <div class="text-xs text-slate-600 dark:text-slate-300 flex items-start gap-1.5 min-w-0">
-                              <i data-lucide="mail" class="w-3 h-3 text-slate-400 dark:text-slate-500 shrink-0 mt-0.5"></i>
-                              <p class="min-w-0 break-words leading-snug">
-                                <span class="font-medium text-slate-700 dark:text-slate-200">Assunto: </span>
-                                <span>${escapeHtml(
-                                  task.assunto_normalizado || task.assunto_original || "Sem assunto"
-                                )}</span>
-                              </p>
-                            </div>
-                          </div>
-
-                          ${threadDrawerHtml}
-                        </div>
-
-                        <div class="flex flex-wrap items-center gap-2 shrink-0">
-                          <select data-role="task-status-select" data-id="${escapeHtml(task.id)}"
-                            aria-label="Alterar status de ${escapeHtml(task.titulo)}"
-                            class="px-2.5 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-200 hover:border-slate-300 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500 cursor-pointer">
-                            ${statusOptionsHtml}
-                          </select>
-                          <button type="button" data-action="open-edit-modal" data-id="${escapeHtml(task.id)}"
-                            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                            <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
-                            <span>Editar</span>
-                          </button>
-                          <button type="button" data-action="request-delete-task" data-id="${escapeHtml(task.id)}"
-                            title="Excluir demanda definitivamente" aria-label="Excluir ${escapeHtml(task.titulo)}"
-                            class="p-1.5 text-slate-400 hover:text-red-700 rounded-lg hover:bg-red-50 dark:text-slate-500 dark:hover:text-red-400 dark:hover:bg-red-950/50 transition-colors cursor-pointer">
-                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
-                          </button>
+                          ${inlineSubtasksHtml}
                         </div>
                       </div>
                     </article>
@@ -2169,90 +2837,102 @@
           }
 
           return `
-            <section class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-xl flex flex-col">
-              <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-col gap-3">
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                  <div role="tablist" aria-label="Filtrar demandas por status"
-                    class="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-lg">
-                    ${statusTabsHtml}
+            <div class="${
+              showSplitDetail
+                ? "grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_440px] xl:grid-cols-[minmax(0,1fr)_480px] gap-5 items-start"
+                : ""
+            }">
+              <section class="bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-xl flex flex-col min-w-0">
+                <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-col gap-3">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div role="tablist" aria-label="Filtrar demandas por status"
+                      class="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-lg">
+                      ${statusTabsHtml}
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <button type="button" data-action="open-create-modal"
+                        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                        <span>Nova demanda</span>
+                      </button>
+                      <button type="button" data-action="export-csv" ${
+                        filtered.length === 0 ? "disabled" : ""
+                      }
+                        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        <span>Exportar CSV</span>
+                      </button>
+                    </div>
                   </div>
-                  <div class="flex flex-wrap items-center gap-2">
-                    <button type="button" data-action="open-create-modal"
-                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                      <i data-lucide="plus" class="w-3.5 h-3.5"></i>
-                      <span>Nova demanda</span>
-                    </button>
-                    <button type="button" data-action="export-csv" ${
-                      filtered.length === 0 ? "disabled" : ""
-                    }
-                      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                      <i data-lucide="download" class="w-3.5 h-3.5"></i>
-                      <span>Exportar CSV</span>
-                    </button>
-                  </div>
-                </div>
 
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                  <div class="flex flex-wrap items-center gap-2.5 flex-1 min-w-[240px]">
-                    <div class="relative flex-1 min-w-[220px] max-w-md">
-                      <i data-lucide="search" class="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
-                      <input type="search" id="task-search-input" value="${escapeHtml(state.search)}"
-                        placeholder="Buscar demanda, rótulo, observação ou histórico..."
-                        class="w-full pl-9 pr-3 py-1.5 text-sm text-slate-900 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
+                  <div class="flex flex-wrap items-center justify-between gap-2.5">
+                    <div class="flex flex-wrap items-center gap-2 flex-1 min-w-[220px]">
+                      <div class="relative flex-1 min-w-[200px] max-w-xs">
+                        <i data-lucide="search" class="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+                        <input type="search" id="task-search-input" value="${escapeHtml(state.search)}"
+                          placeholder="Buscar demanda, rótulo ou subtarefa..."
+                          class="w-full pl-9 pr-3 py-1.5 text-xs sm:text-sm text-slate-900 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
+                      </div>
+                      <div class="relative flex items-center">
+                        <i data-lucide="tag" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
+                        <label for="filter-rotulo-select" class="sr-only">Filtrar por rótulo</label>
+                        <select id="filter-rotulo-select" data-role="label-filter"
+                          class="pl-8 pr-6 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
+                          <option value="Todos" ${activeLabelFilter === "Todos" ? "selected" : ""}>Todos os rótulos</option>
+                          ${availableLabels
+                            .map(
+                              (lbl) =>
+                                `<option value="${escapeHtml(lbl)}" ${
+                                  activeLabelFilter === lbl ? "selected" : ""
+                                }>${escapeHtml(lbl)}</option>`
+                            )
+                            .join("")}
+                        </select>
+                      </div>
+                      <div class="relative flex items-center">
+                        <i data-lucide="folder" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
+                        <label for="filter-categoria-select" class="sr-only">Filtrar por categoria</label>
+                        <select id="filter-categoria-select" data-role="category-filter"
+                          class="pl-8 pr-6 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
+                          <option value="Todas" ${activeCategoryFilter === "Todas" ? "selected" : ""}>Todas as categorias</option>
+                          ${availableCategories
+                            .map(
+                              (cat) =>
+                                `<option value="${escapeHtml(cat)}" ${
+                                  activeCategoryFilter === cat ? "selected" : ""
+                                }>${escapeHtml(cat)}</option>`
+                            )
+                            .join("")}
+                        </select>
+                      </div>
+                      <div class="relative flex items-center">
+                        <i data-lucide="arrow-up-down" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
+                        <label for="queue-sort-select" class="sr-only">Ordenar fila de demandas</label>
+                        <select id="queue-sort-select" data-role="queue-sort"
+                          class="pl-8 pr-6 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
+                          ${SORT_OPTIONS.map(
+                            (opt) =>
+                              `<option value="${opt.value}" ${
+                                state.sortBy === opt.value ? "selected" : ""
+                              }>Ordenar: ${escapeHtml(opt.label)}</option>`
+                          ).join("")}
+                        </select>
+                      </div>
                     </div>
-                    <div class="relative flex items-center">
-                      <i data-lucide="tag" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
-                      <label for="filter-rotulo-select" class="sr-only">Filtrar por rótulo</label>
-                      <select id="filter-rotulo-select" data-role="label-filter"
-                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
-                        <option value="Todos" ${activeLabelFilter === "Todos" ? "selected" : ""}>Todos os rótulos</option>
-                        ${availableLabels
-                          .map(
-                            (lbl) =>
-                              `<option value="${escapeHtml(lbl)}" ${
-                                activeLabelFilter === lbl ? "selected" : ""
-                              }>${escapeHtml(lbl)}</option>`
-                          )
-                          .join("")}
-                      </select>
-                    </div>
-                    <div class="relative flex items-center">
-                      <i data-lucide="folder" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
-                      <label for="filter-categoria-select" class="sr-only">Filtrar por categoria</label>
-                      <select id="filter-categoria-select" data-role="category-filter"
-                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
-                        <option value="Todas" ${activeCategoryFilter === "Todas" ? "selected" : ""}>Todas as categorias</option>
-                        ${availableCategories
-                          .map(
-                            (cat) =>
-                              `<option value="${escapeHtml(cat)}" ${
-                                activeCategoryFilter === cat ? "selected" : ""
-                              }>${escapeHtml(cat)}</option>`
-                          )
-                          .join("")}
-                      </select>
-                    </div>
-                    <div class="relative flex items-center">
-                      <i data-lucide="arrow-up-down" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
-                      <label for="queue-sort-select" class="sr-only">Ordenar fila de demandas</label>
-                      <select id="queue-sort-select" data-role="queue-sort"
-                        class="pl-8 pr-7 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
-                        ${SORT_OPTIONS.map(
-                          (opt) =>
-                            `<option value="${opt.value}" ${
-                              state.sortBy === opt.value ? "selected" : ""
-                            }>Ordenar: ${escapeHtml(opt.label)}</option>`
-                        ).join("")}
-                      </select>
+                    <div class="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-lg">
+                      ${urgencyTabsHtml}
                     </div>
                   </div>
-                  <div class="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-lg">
-                    ${urgencyTabsHtml}
-                  </div>
+                  ${printActionBarHtml}
                 </div>
-              </div>
-              ${listHtml}
-            </section>
+                ${listHtml}
+              </section>
+              ${
+                showSplitDetail
+                  ? renderTaskDetailPanel(selectedTask, availableLabels, availableCategories)
+                  : ""
+              }
+            </div>
           `;
         }
 
@@ -3071,64 +3751,98 @@
             activeEl && activeEl.dataset && activeEl.dataset.role === "picker-new-input"
           );
           const savedPickerSelectionStart = wasPickerInputFocused ? activeEl.selectionStart : null;
+          const isPanelInputFocused = Boolean(
+            activeEl &&
+              activeEl.id &&
+              ((activeEl.dataset && activeEl.dataset.role === "panel-field") ||
+                activeEl.id === "panel-new-subtask-input")
+          );
+          const savedPanelFocus = isPanelInputFocused
+            ? {
+                id: activeEl.id,
+                start: typeof activeEl.selectionStart === "number" ? activeEl.selectionStart : null,
+                end: typeof activeEl.selectionEnd === "number" ? activeEl.selectionEnd : null,
+              }
+            : null;
 
           const root = document.getElementById("app");
           root.innerHTML = `
-            <aside class="hidden lg:block w-64 shrink-0 bg-white border-r border-slate-200 dark:bg-slate-900 dark:border-slate-800">
-              <div class="sticky top-0 h-screen overflow-y-auto">${renderSidebar()}</div>
-            </aside>
-            ${mobileDrawer}
-            <div class="flex-1 min-w-0 flex flex-col">
-              <header class="bg-white border-b border-slate-200 dark:bg-slate-900 dark:border-slate-800 px-6 py-3.5 flex items-center justify-between gap-4">
-                <div class="flex items-center gap-3 min-w-0">
-                  <button type="button" data-action="open-mobile-menu" aria-label="Abrir menu"
-                    class="lg:hidden p-1.5 -ml-1.5 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 cursor-pointer">
-                    <i data-lucide="menu" class="w-5 h-5"></i>
-                  </button>
-                  <span class="text-xs font-medium text-slate-500 dark:text-slate-400 truncate whitespace-nowrap">${viewMeta.breadcrumb}</span>
-                </div>
-                <div class="flex items-center gap-2.5 shrink-0">
-                  ${headerStatusHtml}
-                  <button type="button" data-action="toggle-theme"
-                    aria-label="${isDark ? "Ativar modo claro" : "Ativar modo escuro"}"
-                    title="${isDark ? "Ativar modo claro" : "Ativar modo escuro"}"
-                    class="inline-flex items-center justify-center p-2 text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-100 rounded-lg transition-colors shrink-0 cursor-pointer">
-                    <i data-lucide="${isDark ? "sun" : "moon"}" class="w-4 h-4 ${isDark ? "text-amber-400" : ""}"></i>
-                  </button>
-                  <button type="button" data-action="sync-emails" ${
-                    state.isSyncing || state.isInitialLoading ? "disabled" : ""
-                  }
-                    class="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
-                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5 ${
-                      state.isSyncing ? "animate-spin" : ""
-                    }"></i>
-                    <span>${state.isSyncing ? "Sincronizando..." : "Sincronizar E-mails"}</span>
-                  </button>
-                </div>
-              </header>
+            <div class="no-print min-h-screen flex w-full">
+              <aside class="hidden lg:block w-64 shrink-0 bg-white border-r border-slate-200 dark:bg-slate-900 dark:border-slate-800">
+                <div class="sticky top-0 h-screen overflow-y-auto">${renderSidebar()}</div>
+              </aside>
+              ${mobileDrawer}
+              <div class="flex-1 min-w-0 flex flex-col">
+                <header class="bg-white border-b border-slate-200 dark:bg-slate-900 dark:border-slate-800 px-6 py-3.5 flex items-center justify-between gap-4">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <button type="button" data-action="open-mobile-menu" aria-label="Abrir menu"
+                      class="lg:hidden p-1.5 -ml-1.5 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 cursor-pointer">
+                      <i data-lucide="menu" class="w-5 h-5"></i>
+                    </button>
+                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400 truncate whitespace-nowrap">${viewMeta.breadcrumb}</span>
+                  </div>
+                  <div class="flex items-center gap-2.5 shrink-0">
+                    ${headerStatusHtml}
+                    <button type="button" data-action="toggle-print-mode" ${
+                      state.tasks.length === 0 ? "disabled" : ""
+                    } aria-pressed="${state.isPrintMode ? "true" : "false"}"
+                      class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-40 ${
+                        state.isPrintMode
+                          ? "text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 border-blue-300 dark:border-blue-700"
+                          : "text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
+                      }">
+                      <i data-lucide="printer" class="w-3.5 h-3.5"></i>
+                      <span>Imprimir</span>
+                    </button>
+                    <button type="button" data-action="sync-emails" ${
+                      state.isSyncing || state.isInitialLoading ? "disabled" : ""
+                    }
+                      class="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
+                      <i data-lucide="refresh-cw" class="w-3.5 h-3.5 ${
+                        state.isSyncing ? "animate-spin" : ""
+                      }"></i>
+                      <span>${state.isSyncing ? "Sincronizando..." : "Sincronizar E-mails"}</span>
+                    </button>
+                    <button type="button" data-action="toggle-theme"
+                      aria-label="${isDark ? "Ativar modo claro" : "Ativar modo escuro"}"
+                      title="${isDark ? "Ativar modo claro" : "Ativar modo escuro"}"
+                      class="inline-flex items-center justify-center p-2 text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-100 rounded-lg transition-colors shrink-0 cursor-pointer">
+                      <i data-lucide="${isDark ? "sun" : "moon"}" class="w-4 h-4 ${isDark ? "text-amber-400" : ""}"></i>
+                    </button>
+                  </div>
+                </header>
 
-              <main class="flex-1 p-6 max-w-[1440px] w-full mx-auto">
-                ${errorBannerHtml}
-                <div class="mb-6">
-                  <h1 class="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">${viewMeta.title}</h1>
-                </div>
-                ${state.view === "tasks" ? renderTasksView() : renderRulesView()}
-              </main>
+                <main class="flex-1 p-6 max-w-[1440px] w-full mx-auto">
+                  ${errorBannerHtml}
+                  <div class="mb-6">
+                    <h1 class="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">${viewMeta.title}</h1>
+                  </div>
+                  ${state.view === "tasks" ? renderTasksView() : renderRulesView()}
+                </main>
+              </div>
+              ${renderModal()}
+              ${renderConfirmDeleteModal()}
             </div>
-            ${renderModal()}
-            ${renderConfirmDeleteModal()}
+            <div class="hidden print-only">
+              ${renderPrintableSheet()}
+            </div>
           `;
 
           if (window.lucide && typeof window.lucide.createIcons === "function") {
             window.lucide.createIcons();
           }
 
-          if (state.editingObsTaskId) {
-            const obsInput = document.querySelector(`[data-role="obs-input"][data-id="${CSS.escape(state.editingObsTaskId)}"]`);
-            if (obsInput) {
-              obsInput.focus();
-              const len = obsInput.value.length;
-              obsInput.setSelectionRange(len, len);
+          if (state.openDeadlinePicker) {
+            const dlInput = document.querySelector('[data-role="inline-deadline-input"]');
+            if (dlInput) dlInput.focus();
+          }
+
+          if (state.editingSubtaskId) {
+            const editSubEl = document.querySelector(`[data-role="edit-subtask-input"][data-sub-id="${CSS.escape(state.editingSubtaskId)}"]`);
+            if (editSubEl) {
+              editSubEl.focus();
+              const len = editSubEl.value.length;
+              editSubEl.setSelectionRange(len, len);
             }
           }
 
@@ -3165,6 +3879,31 @@
             const tagEl = document.querySelector(`[data-role="tag-input"][data-context="${CSS.escape(ctx)}"]`);
             if (tagEl) {
               tagEl.focus();
+            }
+          }
+
+          if (
+            savedPanelFocus &&
+            !state.openDeadlinePicker &&
+            !state.editingSubtaskId &&
+            !state.pendingFocusPickerInput &&
+            !wasPickerInputFocused &&
+            !state.editingLabelItem
+          ) {
+            const elToFocus = document.getElementById(savedPanelFocus.id);
+            if (elToFocus) {
+              elToFocus.focus();
+              if (
+                savedPanelFocus.start !== null &&
+                savedPanelFocus.end !== null &&
+                typeof elToFocus.setSelectionRange === "function"
+              ) {
+                try {
+                  elToFocus.setSelectionRange(savedPanelFocus.start, savedPanelFocus.end);
+                } catch {
+                  // Ignore selection errors on unsupported input types
+                }
+              }
             }
           }
         }
@@ -3464,6 +4203,7 @@
             "Status",
             "Observação do Status",
             "Observações e Acompanhamento",
+            "Subtarefas",
             "Mensagens na Conversa",
             "Título",
             "Descrição",
@@ -3484,6 +4224,9 @@
               t.status ?? (t.completed ? "Concluído" : "A Fazer"),
               t.statusNote ?? "",
               t.observacoes ?? "",
+              (t.subtarefas || [])
+                .map((s) => `${s.concluida ? "[x]" : "[ ]"} ${s.titulo}`)
+                .join("; "),
               (t.historico_mensagens || []).length || 1,
               t.titulo,
               t.descricao,
@@ -3609,8 +4352,14 @@
             return;
           }
 
-          if (state.openCardPicker) {
-            const { taskId, type } = state.openCardPicker;
+          const activePicker =
+            state.openCardPicker ||
+            (state.openPanelPickerType && state.selectedTaskId
+              ? { taskId: state.selectedTaskId, type: state.openPanelPickerType }
+              : null);
+
+          if (activePicker) {
+            const { taskId, type } = activePicker;
             const task = state.tasks.find((t) => t.id === taskId);
             if (!task) return;
             const isLabel = type === "label";
@@ -3668,8 +4417,14 @@
             return;
           }
 
-          if (state.openCardPicker) {
-            const { taskId, type } = state.openCardPicker;
+          const activePicker =
+            state.openCardPicker ||
+            (state.openPanelPickerType && state.selectedTaskId
+              ? { taskId: state.selectedTaskId, type: state.openPanelPickerType }
+              : null);
+
+          if (activePicker) {
+            const { taskId, type } = activePicker;
             const task = state.tasks.find((t) => t.id === taskId);
             if (!task) return;
             const isLabel = type === "label";
@@ -3842,6 +4597,40 @@
             state.editingObsTaskId = null;
             state.obsDraft = "";
             render();
+          } else if (action === "toggle-print-mode") {
+            state.isPrintMode = !state.isPrintMode;
+            if (state.isPrintMode) {
+              state.openCardPicker = null;
+              state.openPanelPickerType = null;
+              state.openDeadlinePicker = null;
+            } else {
+              state.selectedPrintIds = [];
+            }
+            render();
+          } else if (action === "toggle-print-select") {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            if (state.selectedPrintIds.includes(id)) {
+              state.selectedPrintIds = state.selectedPrintIds.filter((item) => item !== id);
+            } else {
+              state.selectedPrintIds = [...state.selectedPrintIds, id];
+            }
+            render();
+          } else if (action === "print-select-all") {
+            const visibleIds = getFilteredTasks().map((t) => t.id);
+            state.selectedPrintIds = Array.from(new Set([...state.selectedPrintIds, ...visibleIds]));
+            render();
+          } else if (action === "print-clear-all") {
+            state.selectedPrintIds = [];
+            render();
+          } else if (action === "execute-print") {
+            if (state.selectedPrintIds.length > 0) {
+              window.print();
+            }
+          } else if (action === "cancel-print-mode") {
+            state.isPrintMode = false;
+            state.selectedPrintIds = [];
+            render();
           } else if (action === "toggle-card-picker") {
             e.stopPropagation();
             const taskId = btn.dataset.id;
@@ -3853,25 +4642,152 @@
                 state.openCardPicker.type === type
             );
             state.openModalPickerType = null;
+            state.openPanelPickerType = null;
+            state.openDeadlinePicker = null;
             state.pickerNewDraft = "";
             state.openCardPicker = isSame ? null : { taskId, type };
+            render();
+          } else if (action === "toggle-panel-picker") {
+            e.stopPropagation();
+            const type = btn.dataset.type;
+            state.openCardPicker = null;
+            state.openModalPickerType = null;
+            state.openDeadlinePicker = null;
+            state.pickerNewDraft = "";
+            state.openPanelPickerType = state.openPanelPickerType === type ? null : type;
             render();
           } else if (action === "toggle-modal-picker") {
             e.stopPropagation();
             const type = btn.dataset.type;
             state.openCardPicker = null;
+            state.openPanelPickerType = null;
+            state.openDeadlinePicker = null;
             state.pickerNewDraft = "";
             state.openModalPickerType = state.openModalPickerType === type ? null : type;
             render();
           } else if (action === "close-picker") {
             e.stopPropagation();
             state.openCardPicker = null;
+            state.openPanelPickerType = null;
             state.openModalPickerType = null;
             state.pickerNewDraft = "";
             render();
           } else if (action === "picker-add-option") {
             e.stopPropagation();
             addNewOptionFromPicker();
+          } else if (action === "toggle-deadline-picker") {
+            e.stopPropagation();
+            const taskId = btn.dataset.id;
+            const context = btn.dataset.context || "list";
+            markTaskAsViewed(taskId);
+            const isSame = Boolean(
+              state.openDeadlinePicker &&
+                state.openDeadlinePicker.taskId === taskId &&
+                state.openDeadlinePicker.context === context
+            );
+            state.openCardPicker = null;
+            state.openPanelPickerType = null;
+            state.openModalPickerType = null;
+            state.openDeadlinePicker = isSame ? null : { taskId, context };
+            render();
+          } else if (action === "clear-inline-deadline") {
+            e.stopPropagation();
+            const taskId = btn.dataset.id;
+            const task = state.tasks.find((t) => t.id === taskId);
+            state.openDeadlinePicker = null;
+            if (task) {
+              const updated = { ...task, prazo: null };
+              state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+              void persistDemand(updated);
+            } else {
+              render();
+            }
+          } else if (action === "close-inline-deadline") {
+            e.stopPropagation();
+            state.openDeadlinePicker = null;
+            render();
+          } else if (action === "toggle-inline-subtasks") {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            markTaskAsViewed(id);
+            state.expandedSubtasks[id] = !state.expandedSubtasks[id];
+            render();
+          } else if (action === "toggle-inline-subtask-label") {
+            e.stopPropagation();
+            toggleSubtaskOnTask(btn.dataset.id, btn.dataset.subId);
+          } else if (action === "add-subtask") {
+            e.stopPropagation();
+            addSubtaskToTask(btn.dataset.id);
+          } else if (action === "start-edit-subtask") {
+            e.stopPropagation();
+            const task = state.tasks.find((t) => t.id === btn.dataset.id);
+            const sub = task && (task.subtarefas || []).find((s) => s.id === btn.dataset.subId);
+            if (sub) {
+              state.editingSubtaskId = sub.id;
+              state.editingSubtaskDraft = sub.titulo;
+              render();
+            }
+          } else if (action === "delete-subtask") {
+            e.stopPropagation();
+            deleteSubtaskOnTask(btn.dataset.id, btn.dataset.subId);
+          } else if (action === "save-panel-details") {
+            e.stopPropagation();
+            commitPanelTextFields(btn.dataset.id, "Alterações salvas");
+          } else if (action === "save-panel-waiting") {
+            e.stopPropagation();
+            commitPanelTextFields(btn.dataset.id, "Motivo salvo");
+          } else if (action === "close-detail-panel") {
+            e.stopPropagation();
+            if (state.selectedTaskId) {
+              const prevTask = state.tasks.find((t) => t.id === state.selectedTaskId);
+              if (prevTask && isPanelDraftDirty(prevTask)) {
+                commitPanelTextFields(prevTask.id, "Alterações salvas");
+              }
+            }
+            state.selectedTaskId = null;
+            state.panelDraft = null;
+            state.openPanelPickerType = null;
+            state.openDeadlinePicker = null;
+            state.editingSubtaskId = null;
+            state.newSubtaskDraft = "";
+            render();
+          } else if (action === "select-task") {
+            if (
+              e.target.closest(
+                "button, select, input, a, label, [data-picker-root], [data-deadline-root], [data-stop-row]"
+              )
+            ) {
+              return;
+            }
+            const id = btn.dataset.id;
+            markTaskAsViewed(id);
+            if (state.isPrintMode) {
+              if (state.selectedPrintIds.includes(id)) {
+                state.selectedPrintIds = state.selectedPrintIds.filter((item) => item !== id);
+              } else {
+                state.selectedPrintIds = [...state.selectedPrintIds, id];
+              }
+              render();
+              return;
+            }
+            if (state.selectedTaskId && state.selectedTaskId !== id) {
+              const prevTask = state.tasks.find((t) => t.id === state.selectedTaskId);
+              if (prevTask && isPanelDraftDirty(prevTask)) {
+                commitPanelTextFields(prevTask.id, "Alterações salvas");
+              }
+            }
+            const target = state.tasks.find((t) => t.id === id);
+            if (target) {
+              state.selectedTaskId = id;
+              state.panelDraft = createPanelDraft(target);
+              state.newSubtaskDraft = "";
+              state.editingSubtaskId = null;
+              state.editingSubtaskDraft = "";
+              state.openCardPicker = null;
+              state.openPanelPickerType = null;
+              state.openDeadlinePicker = null;
+              render();
+            }
           } else if (action === "toggle-thread") {
             e.stopPropagation();
             const id = btn.dataset.id;
@@ -3884,7 +4800,9 @@
             if (task) {
               markTaskAsViewed(task.id);
               state.openCardPicker = null;
+              state.openPanelPickerType = null;
               state.openModalPickerType = null;
+              state.openDeadlinePicker = null;
               state.pickerNewDraft = "";
               state.modalTask = { ...task };
               state.modalForm = createModalFormDraft(task);
@@ -3898,7 +4816,9 @@
             const nowDt = getNowIsoDateTime();
             const defaultCat = state.categories[0] || "Outro";
             state.openCardPicker = null;
+            state.openPanelPickerType = null;
             state.openModalPickerType = null;
+            state.openDeadlinePicker = null;
             state.pickerNewDraft = "";
             state.modalTask = {
               id: `manual-${uuid()}`,
@@ -3923,6 +4843,7 @@
               observacoes: "",
               hasNewMessage: false,
               historico_mensagens: [],
+              subtarefas: [],
               completed: false,
             };
             state.modalForm = createModalFormDraft(state.modalTask);
@@ -3987,6 +4908,17 @@
             const id = btn.dataset.id;
             state.confirmDeleteTask = null;
             state.tasks = state.tasks.filter((t) => t.id !== id);
+            state.selectedPrintIds = state.selectedPrintIds.filter((item) => item !== id);
+            if (state.selectedTaskId === id) {
+              state.selectedTaskId = null;
+              state.panelDraft = null;
+              state.openPanelPickerType = null;
+              state.editingSubtaskId = null;
+              state.newSubtaskDraft = "";
+            }
+            if (state.openDeadlinePicker && state.openDeadlinePicker.taskId === id) {
+              state.openDeadlinePicker = null;
+            }
             if (!state.deletedIds.includes(id)) {
               state.deletedIds = [...state.deletedIds, id];
               saveStoredIdList(STORAGE_DELETED_IDS_KEY, state.deletedIds);
@@ -4137,6 +5069,29 @@
               state.openCardPicker = null;
             }
             void persistDemand(updated);
+          } else if (target.dataset.role === "inline-deadline-input") {
+            const taskId = target.dataset.id;
+            const task = state.tasks.find((t) => t.id === taskId);
+            state.openDeadlinePicker = null;
+            if (task) {
+              const updated = { ...task, prazo: target.value ? target.value : null };
+              state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+              void persistDemand(updated);
+            }
+          } else if (
+            target.dataset.role === "inline-subtask-checkbox" ||
+            target.dataset.role === "panel-subtask-checkbox"
+          ) {
+            toggleSubtaskOnTask(target.dataset.id, target.dataset.subId);
+          } else if (target.dataset.role === "panel-urgency-select") {
+            const taskId = target.dataset.id;
+            const task = state.tasks.find((t) => t.id === taskId);
+            if (task) {
+              markTaskAsViewed(taskId);
+              const updated = { ...task, urgencia: target.value };
+              state.tasks = state.tasks.map((t) => (t.id === taskId ? updated : t));
+              void persistDemand(updated);
+            }
           } else if (target.dataset.role === "label-filter") {
             state.labelFilter = target.value;
             render();
@@ -4168,7 +5123,28 @@
 
         rootEl.addEventListener("input", (e) => {
           const target = e.target;
-          if (state.modalForm && target.id === "modal-titulo") {
+          if (target.dataset.role === "panel-field") {
+            const field = target.dataset.field;
+            const taskId = target.dataset.id;
+            if (state.panelDraft && state.panelDraft.taskId === taskId && field) {
+              state.panelDraft[field] = target.value;
+              const task = state.tasks.find((t) => t.id === taskId);
+              const saveBtn = document.querySelector('[data-role="panel-save-btn"]');
+              if (saveBtn && task) {
+                if (isPanelDraftDirty(task)) {
+                  saveBtn.classList.remove("hidden");
+                  saveBtn.classList.add("inline-flex");
+                } else {
+                  saveBtn.classList.add("hidden");
+                  saveBtn.classList.remove("inline-flex");
+                }
+              }
+            }
+          } else if (target.id === "panel-new-subtask-input") {
+            state.newSubtaskDraft = target.value;
+          } else if (target.dataset.role === "edit-subtask-input") {
+            state.editingSubtaskDraft = target.value;
+          } else if (state.modalForm && target.id === "modal-titulo") {
             state.modalForm.titulo = target.value;
           } else if (state.modalForm && target.id === "modal-descricao") {
             state.modalForm.descricao = target.value;
@@ -4237,7 +5213,24 @@
           "blur",
           (e) => {
             const target = e.target;
-            if (target.dataset.role === "waiting-note") {
+            if (target.dataset.role === "panel-field") {
+              const taskId = target.dataset.id;
+              window.setTimeout(() => {
+                if (state.selectedTaskId !== taskId || state.confirmDeleteTask) return;
+                const currentTask = state.tasks.find((t) => t.id === taskId);
+                if (currentTask && isPanelDraftDirty(currentTask)) {
+                  commitPanelTextFields(taskId, "Salvo automaticamente");
+                }
+              }, 120);
+            } else if (target.dataset.role === "edit-subtask-input") {
+              const taskId = target.dataset.id;
+              const subId = target.dataset.subId;
+              window.setTimeout(() => {
+                if (state.editingSubtaskId === subId) {
+                  commitEditSubtask(taskId, subId);
+                }
+              }, 100);
+            } else if (target.dataset.role === "waiting-note") {
               const related = e.relatedTarget;
               if (related && related.dataset && related.dataset.waitingAction === "save") {
                 return;
@@ -4275,7 +5268,21 @@
 
         rootEl.addEventListener("keydown", (e) => {
           const target = e.target;
-          if (target.dataset.role === "waiting-note" && e.key === "Enter") {
+          if (target.id === "panel-new-subtask-input" && e.key === "Enter") {
+            e.preventDefault();
+            addSubtaskToTask(target.dataset.id);
+          } else if (target.dataset.role === "edit-subtask-input") {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitEditSubtask(target.dataset.id, target.dataset.subId);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              state.editingSubtaskId = null;
+              state.editingSubtaskDraft = "";
+              render();
+            }
+          } else if (target.dataset.role === "waiting-note" && e.key === "Enter") {
             e.preventDefault();
             void commitWaitingNote(target.dataset.id, target.value, true);
           } else if (target.dataset.role === "obs-input") {
@@ -4297,6 +5304,7 @@
               e.preventDefault();
               e.stopPropagation();
               state.openCardPicker = null;
+              state.openPanelPickerType = null;
               state.openModalPickerType = null;
               state.pickerNewDraft = "";
               render();
@@ -4467,13 +5475,22 @@
         });
 
         document.addEventListener("mousedown", (e) => {
-          if (!state.openCardPicker && !state.openModalPickerType) return;
-          if (!e.target.closest("[data-picker-root]")) {
+          let changed = false;
+          if (
+            (state.openCardPicker || state.openPanelPickerType || state.openModalPickerType) &&
+            !e.target.closest("[data-picker-root]")
+          ) {
             state.openCardPicker = null;
+            state.openPanelPickerType = null;
             state.openModalPickerType = null;
             state.pickerNewDraft = "";
-            render();
+            changed = true;
           }
+          if (state.openDeadlinePicker && !e.target.closest("[data-deadline-root]")) {
+            state.openDeadlinePicker = null;
+            changed = true;
+          }
+          if (changed) render();
         });
 
         window.addEventListener("keydown", (e) => {
@@ -4484,9 +5501,16 @@
               render();
               return;
             }
-            if (state.openCardPicker || state.openModalPickerType) {
+            if (state.openDeadlinePicker) {
+              e.preventDefault();
+              state.openDeadlinePicker = null;
+              render();
+              return;
+            }
+            if (state.openCardPicker || state.openPanelPickerType || state.openModalPickerType) {
               e.preventDefault();
               state.openCardPicker = null;
+              state.openPanelPickerType = null;
               state.openModalPickerType = null;
               state.pickerNewDraft = "";
               render();
@@ -4495,6 +5519,12 @@
             if (state.modalTask) {
               state.modalTask = null;
               state.modalForm = null;
+              render();
+              return;
+            }
+            if (state.selectedTaskId && !state.editingSubtaskId) {
+              state.selectedTaskId = null;
+              state.panelDraft = null;
               render();
             }
           }
