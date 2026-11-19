@@ -154,6 +154,7 @@
           "A Fazer",
           "Iniciado",
           "Aguardando",
+          "Em acompanhamento",
           "Concluído",
         ];
 
@@ -711,6 +712,7 @@
           const s = String(value ?? "").trim().toLowerCase();
           if (s === "iniciado") return "Iniciado";
           if (s === "aguardando") return "Aguardando";
+          if (s === "em acompanhamento") return "Em acompanhamento";
           if (s === "concluído" || s === "concluido") return "Concluído";
           if (s === "a fazer") return "A Fazer";
           return completed === true ? "Concluído" : "A Fazer";
@@ -1463,8 +1465,12 @@
             const taskCategories = getTaskCategories(task);
             if (state.statusFilter === "Concluído") {
               if (currentStatus !== "Concluído") return false;
+            } else if (state.statusFilter === "Em acompanhamento") {
+              if (currentStatus !== "Em acompanhamento") return false;
             } else {
-              if (currentStatus === "Concluído") return false;
+              if (currentStatus === "Concluído" || currentStatus === "Em acompanhamento") {
+                return false;
+              }
               if (state.statusFilter !== "Todos" && currentStatus !== state.statusFilter) {
                 return false;
               }
@@ -1805,6 +1811,11 @@
               classes:
                 "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/70",
             },
+            "Em acompanhamento": {
+              icon: "eye",
+              classes:
+                "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800/70",
+            },
             Concluído: {
               icon: "check-circle-2",
               classes:
@@ -1863,9 +1874,19 @@
         }
 
         function renderSidebar() {
-          const pendingCount = state.tasks.filter((t) => t.status !== "Concluído").length;
-          const highCount = state.tasks.filter((t) => t.status !== "Concluído" && t.urgencia === "Alta").length;
+          const pendingCount = state.tasks.filter(
+            (t) => t.status !== "Concluído" && t.status !== "Em acompanhamento"
+          ).length;
+          const highCount = state.tasks.filter(
+            (t) =>
+              t.status !== "Concluído" &&
+              t.status !== "Em acompanhamento" &&
+              t.urgencia === "Alta"
+          ).length;
           const waitingCount = state.tasks.filter((t) => t.status === "Aguardando").length;
+          const monitoringCount = state.tasks.filter(
+            (t) => t.status === "Em acompanhamento"
+          ).length;
           const unreadCount = state.tasks.filter((t) => t.hasNewMessage).length;
           const activeRulesCount = state.rules.filter((r) => r.ativo).length;
 
@@ -1920,6 +1941,10 @@
                     <div class="flex items-center justify-between">
                       <dt class="text-slate-600 dark:text-slate-400">Em aguardo</dt>
                       <dd class="font-mono tabular-nums font-semibold text-amber-700 dark:text-amber-400">${waitingCount}</dd>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <dt class="text-slate-600 dark:text-slate-400">Em acompanhamento</dt>
+                      <dd class="font-mono tabular-nums font-semibold text-indigo-700 dark:text-indigo-400">${monitoringCount}</dd>
                     </div>
                     <div class="flex items-center justify-between">
                       <dt class="text-slate-600 dark:text-slate-400">Novas mensagens</dt>
@@ -2106,6 +2131,18 @@
           const d = state.panelDraft;
           const currentStatus = task.status ?? (task.completed ? "Concluído" : "A Fazer");
           const isCompleted = currentStatus === "Concluído";
+          const isMonitoring = currentStatus === "Em acompanhamento";
+          const isNeutralDeadline = isCompleted || isMonitoring;
+          const panelStatusSelectCls =
+            currentStatus === "Iniciado"
+              ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800/70"
+              : currentStatus === "Aguardando"
+              ? "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/70"
+              : isMonitoring
+              ? "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800/70"
+              : isCompleted
+              ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/70"
+              : "text-slate-800 dark:text-slate-100 bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700";
           const taskLabels = getTaskLabels(task);
           const taskCategories = getTaskCategories(task);
           const subtasks = Array.isArray(task.subtarefas) ? task.subtarefas : [];
@@ -2278,7 +2315,7 @@
                     <div>
                       <label for="detail-task-status" class="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">Status</label>
                       <select id="detail-task-status" data-role="task-status-select" data-id="${escapeHtml(task.id)}"
-                        class="w-full px-2.5 py-1.5 text-xs font-medium text-slate-800 dark:text-slate-100 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
+                        class="w-full px-2.5 py-1.5 text-xs font-medium border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer ${panelStatusSelectCls}">
                         ${statusOptionsHtml}
                       </select>
                     </div>
@@ -2291,7 +2328,7 @@
                     </div>
                     <div>
                       <span class="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">Prazo</span>
-                      ${renderInlineDeadlineBadge(task.prazo, isCompleted, task.id, "panel")}
+                      ${renderInlineDeadlineBadge(task.prazo, isNeutralDeadline, task.id, "panel")}
                     </div>
                   </div>
 
@@ -2375,22 +2412,42 @@
 
                 <div class="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
                   ${
-                    currentStatus === "Aguardando"
+                    currentStatus === "Aguardando" || isMonitoring
                       ? `<div>
                           <div class="flex items-center justify-between gap-2 mb-1">
-                            <label for="detail-waiting-note" class="flex items-center gap-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
+                            <label for="detail-waiting-note" class="flex items-center gap-1.5 text-xs font-medium ${
+                              isMonitoring
+                                ? "text-indigo-800 dark:text-indigo-300"
+                                : "text-amber-800 dark:text-amber-300"
+                            }">
                               <i data-lucide="message-square-text" class="w-3.5 h-3.5"></i>
-                              <span>Motivo / pendência em aguardo</span>
+                              <span>${
+                                isMonitoring
+                                  ? "Contexto / acompanhamento"
+                                  : "Motivo / pendência em aguardo"
+                              }</span>
                             </label>
                             <button type="button" data-action="save-panel-waiting" data-id="${escapeHtml(task.id)}"
-                              class="text-[11px] font-medium text-amber-800 dark:text-amber-300 hover:underline cursor-pointer">
-                              Salvar motivo
+                              class="text-[11px] font-medium ${
+                                isMonitoring
+                                  ? "text-indigo-800 dark:text-indigo-300"
+                                  : "text-amber-800 dark:text-amber-300"
+                              } hover:underline cursor-pointer">
+                              ${isMonitoring ? "Salvar contexto" : "Salvar motivo"}
                             </button>
                           </div>
                           <input id="detail-waiting-note" type="text" data-role="panel-field" data-field="statusNote" data-id="${escapeHtml(
                             task.id
-                          )}" value="${escapeHtml(d.statusNote)}" placeholder="Ex: Aguardando retorno da área jurídica..."
-                            class="w-full px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 bg-amber-50/50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 rounded-lg placeholder:text-amber-700/60 dark:placeholder:text-amber-400/50 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-600" />
+                          )}" value="${escapeHtml(d.statusNote)}" placeholder="${
+                            isMonitoring
+                              ? "Com quem está ou o que está sendo monitorado..."
+                              : "Ex: Aguardando retorno da área jurídica..."
+                          }"
+                            class="w-full px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 rounded-lg focus:outline-none focus:ring-2 ${
+                              isMonitoring
+                                ? "bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/70 placeholder:text-indigo-700/60 dark:placeholder:text-indigo-400/50 focus:ring-indigo-500/20 focus:border-indigo-600"
+                                : "bg-amber-50/50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 placeholder:text-amber-700/60 dark:placeholder:text-amber-400/50 focus:ring-amber-500/20 focus:border-amber-600"
+                            }" />
                         </div>`
                       : ""
                   }
@@ -2549,7 +2606,11 @@
                           notes
                             ? `<div class="mt-2 pt-2 border-t border-slate-200 text-xs text-slate-800">
                                 <span class="font-semibold text-slate-900">${
-                                  status === "Aguardando" ? "Motivo / Observações: " : "Observações: "
+                                  status === "Aguardando"
+                                    ? "Motivo / Observações: "
+                                    : status === "Em acompanhamento"
+                                    ? "Contexto / Observações: "
+                                    : "Observações: "
                                 }</span>
                                 <span class="whitespace-pre-line">${escapeHtml(notes)}</span>
                               </div>`
@@ -2622,13 +2683,18 @@
             "A Fazer": 0,
             Iniciado: 0,
             Aguardando: 0,
+            "Em acompanhamento": 0,
             Concluído: 0,
           };
+          let monitoringNewMessageCount = 0;
           for (const t of state.tasks) {
             const st = t.status ?? (t.completed ? "Concluído" : "A Fazer");
             counts[st] = (counts[st] ?? 0) + 1;
-            if (st !== "Concluído") {
+            if (st !== "Concluído" && st !== "Em acompanhamento") {
               counts.Todos += 1;
+            }
+            if (st === "Em acompanhamento" && t.hasNewMessage) {
+              monitoringNewMessageCount += 1;
             }
           }
 
@@ -2645,14 +2711,30 @@
 
           const statusTabsHtml = STATUS_FILTER_OPTIONS.map((st) => {
             const active = state.statusFilter === st;
+            const isMonitoringTab = st === "Em acompanhamento";
+            const noveltyHtml =
+              isMonitoringTab && monitoringNewMessageCount > 0
+                ? `<span title="${monitoringNewMessageCount} ${
+                    monitoringNewMessageCount === 1 ? "nova mensagem" : "novas mensagens"
+                  } em acompanhamento"
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold rounded-md bg-indigo-100 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/80 dark:text-indigo-300 dark:border-indigo-700/80">
+                    <span class="w-1.5 h-1.5 rounded-full bg-indigo-600 dark:bg-indigo-400 animate-pulse" aria-hidden="true"></span>
+                    <i data-lucide="bell-ring" class="w-2.5 h-2.5 shrink-0"></i>
+                    <span class="font-mono tabular-nums">${monitoringNewMessageCount}</span>
+                  </span>`
+                : "";
+            const tabColorCls = active
+              ? isMonitoringTab
+                ? "bg-white text-indigo-700 shadow-sm dark:bg-slate-700 dark:text-indigo-300"
+                : "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-100"
+              : isMonitoringTab
+              ? "text-indigo-700/80 hover:text-indigo-900 dark:text-indigo-300/80 dark:hover:text-indigo-200"
+              : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100";
             return `<button type="button" data-action="status-filter" data-value="${escapeHtml(st)}"
-              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                active
-                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-100"
-                  : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
-              }">
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${tabColorCls}">
               <span>${escapeHtml(st)}</span>
               <span class="font-mono tabular-nums text-[11px] text-slate-400 dark:text-slate-500">${counts[st]}</span>
+              ${noveltyHtml}
             </button>`;
           }).join("");
 
@@ -2733,6 +2815,18 @@
                   </button>
                 </div>
               `;
+            } else if (state.statusFilter === "Em acompanhamento") {
+              listHtml = `
+                <div class="py-12 px-6 text-center">
+                  <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                    Nenhuma demanda em acompanhamento no momento
+                  </p>
+                  <button type="button" data-action="status-filter" data-value="Todos"
+                    class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer">
+                    Ver demandas ativas
+                  </button>
+                </div>
+              `;
             } else if (state.statusFilter === "Concluído") {
               listHtml = `
                 <div class="py-12 px-6 text-center">
@@ -2751,14 +2845,24 @@
                   <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
                     Nenhuma demanda ativa no momento
                   </p>
-                  ${
-                    counts["Concluído"] > 0
-                      ? `<button type="button" data-action="status-filter" data-value="Concluído"
-                          class="mt-3 px-3 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer">
-                          Ver concluídos (${counts["Concluído"]})
-                        </button>`
-                      : ""
-                  }
+                  <div class="mt-3 flex flex-wrap items-center justify-center gap-4">
+                    ${
+                      counts["Em acompanhamento"] > 0
+                        ? `<button type="button" data-action="status-filter" data-value="Em acompanhamento"
+                            class="px-3 py-1.5 text-xs font-medium text-indigo-700 dark:text-indigo-400 hover:underline cursor-pointer">
+                            Ver em acompanhamento (${counts["Em acompanhamento"]})
+                          </button>`
+                        : ""
+                    }
+                    ${
+                      counts["Concluído"] > 0
+                        ? `<button type="button" data-action="status-filter" data-value="Concluído"
+                            class="px-3 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer">
+                            Ver concluídos (${counts["Concluído"]})
+                          </button>`
+                        : ""
+                    }
+                  </div>
                 </div>
               `;
             } else {
@@ -2781,6 +2885,8 @@
                 .map((task) => {
                   const currentStatus = task.status ?? (task.completed ? "Concluído" : "A Fazer");
                   const isCompleted = currentStatus === "Concluído";
+                  const isMonitoring = currentStatus === "Em acompanhamento";
+                  const isNeutralDeadline = isCompleted || isMonitoring;
                   const isNewDemand = currentStatus === "A Fazer" && !viewedSet.has(task.id);
                   const isLabelPickerOpen = Boolean(
                     state.openCardPicker &&
@@ -2829,7 +2935,9 @@
                       ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800/70"
                       : currentStatus === "Aguardando"
                       ? "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/70"
-                      : currentStatus === "Concluído"
+                      : isMonitoring
+                      ? "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800/70"
+                      : isCompleted
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/70"
                       : "bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700";
 
@@ -2908,7 +3016,7 @@
                                 </select>
                               </div>
 
-                              ${renderInlineDeadlineBadge(task.prazo, isCompleted, task.id, "list")}
+                              ${renderInlineDeadlineBadge(task.prazo, isNeutralDeadline, task.id, "list")}
 
                               ${renderCheckboxPopover({
                                 scope: "card",
@@ -3919,10 +4027,18 @@
                     </div>
 
                     <div>
-                      <label for="modal-status-note" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Observação do status</label>
+                      <label for="modal-status-note" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">${
+                        form.status === "Em acompanhamento"
+                          ? "Contexto do acompanhamento"
+                          : "Observação do status"
+                      }</label>
                       <input id="modal-status-note" type="text" value="${escapeHtml(
                         form.statusNote
-                      )}" placeholder="Ex: Aguardando retorno de..."
+                      )}" placeholder="${
+                        form.status === "Em acompanhamento"
+                          ? "Com quem está ou o que está sendo monitorado..."
+                          : "Ex: Aguardando retorno de..."
+                      }"
                         class="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
                     </div>
                   </div>
@@ -4864,7 +4980,10 @@
             render();
           } else if (action === "clear-filters") {
             state.search = "";
-            if (state.statusFilter !== "Concluído") {
+            if (
+              state.statusFilter !== "Concluído" &&
+              state.statusFilter !== "Em acompanhamento"
+            ) {
               state.statusFilter = "Todos";
             }
             state.urgencyFilter = "Todas";
@@ -5058,7 +5177,9 @@
             commitPanelTextFields(btn.dataset.id, "Alterações salvas");
           } else if (action === "save-panel-waiting") {
             e.stopPropagation();
-            commitPanelTextFields(btn.dataset.id, "Motivo salvo");
+            const task = state.tasks.find((t) => t.id === btn.dataset.id);
+            const isMon = task && task.status === "Em acompanhamento";
+            commitPanelTextFields(btn.dataset.id, isMon ? "Contexto salvo" : "Motivo salvo");
           } else if (action === "close-detail-panel") {
             e.stopPropagation();
             if (state.selectedTaskId) {
@@ -5477,6 +5598,19 @@
             state.modalForm.urgencia = target.value;
           } else if (state.modalForm && target.id === "modal-status") {
             state.modalForm.status = target.value;
+            const noteInput = document.getElementById("modal-status-note");
+            const noteLabel = document.querySelector('label[for="modal-status-note"]');
+            const isMon = target.value === "Em acompanhamento";
+            if (noteInput) {
+              noteInput.placeholder = isMon
+                ? "Com quem está ou o que está sendo monitorado..."
+                : "Ex: Aguardando retorno de...";
+            }
+            if (noteLabel) {
+              noteLabel.textContent = isMon
+                ? "Contexto do acompanhamento"
+                : "Observação do status";
+            }
           } else if (target.id === "rule-match-type") {
             state.ruleFormMatchType = target.value;
           } else if (target.id === "rule-action-select") {
@@ -5656,6 +5790,11 @@
           if (target.id === "panel-new-subtask-input" && e.key === "Enter") {
             e.preventDefault();
             addSubtaskToTask(target.dataset.id);
+          } else if (target.id === "detail-waiting-note" && e.key === "Enter") {
+            e.preventDefault();
+            const task = state.tasks.find((t) => t.id === target.dataset.id);
+            const isMon = task && task.status === "Em acompanhamento";
+            commitPanelTextFields(target.dataset.id, isMon ? "Contexto salvo" : "Motivo salvo");
           } else if (target.dataset.role === "edit-subtask-input") {
             if (e.key === "Enter") {
               e.preventDefault();
