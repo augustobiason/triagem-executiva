@@ -126,6 +126,7 @@
             ativo: true,
             matchType: "dominio",
             matchValue: "@machadoassociados.com.br",
+            acao: "Classificar",
             rotulo: "Jurídico Externo",
             categoria: "Revisão",
           },
@@ -134,6 +135,7 @@
             ativo: true,
             matchType: "nome",
             matchValue: "Diretoria Executiva",
+            acao: "Classificar",
             rotulo: "Diretoria",
             categoria: "Reunião",
           },
@@ -142,6 +144,7 @@
             ativo: true,
             matchType: "conteudo",
             matchValue: "nota fiscal",
+            acao: "Classificar",
             rotulo: "Financeiro",
             categoria: "Administrativo",
           },
@@ -162,6 +165,11 @@
           nome: "Nome do solicitante",
           conteudo: "Assunto ou conteúdo",
         };
+
+        const RULE_ACTION_OPTIONS = [
+          { value: "Classificar", label: "Classificar (Rótulo/Categoria)" },
+          { value: "Ignorar", label: "Ignorar e-mail" },
+        ];
 
         const PT_BR_MONTHS_SHORT = [
           "jan",
@@ -457,6 +465,24 @@
           return Array.isArray(task.categorias) && task.categorias.length > 0
             ? normalizeTagList(task.categorias, "Outro")
             : parseMultiValueField(task.categoria, "Outro");
+        }
+
+        function getSenderDisplay(task) {
+          if (!task) return "Não identificado";
+          const rawName = String(task.solicitante_nome ?? "").trim();
+          const email = String(task.solicitante_email ?? "").trim();
+          const lower = rawName.toLowerCase();
+          const isUnidentified =
+            !rawName ||
+            lower === "não identificado" ||
+            lower === "nao identificado" ||
+            lower === "desconhecido" ||
+            lower === "sem nome" ||
+            (lower === "solicitante" && Boolean(email));
+          if (!isUnidentified) {
+            return rawName;
+          }
+          return email || rawName || "Não identificado";
         }
 
         function uuid() {
@@ -903,14 +929,34 @@
           return "conteudo";
         }
 
+        function normalizeRuleAction(value) {
+          const s = String(value ?? "").trim().toLowerCase();
+          if (
+            s === "ignorar" ||
+            s === "ignorar e-mail" ||
+            s === "ignorar email" ||
+            s === "ignore"
+          ) {
+            return "Ignorar";
+          }
+          return "Classificar";
+        }
+
         function normalizeRule(raw, index) {
           const r = raw || {};
           const condicao = String(r.condicao ?? r.matchValue ?? r.valor ?? "").trim();
           const rawMatchType = r.matchType ?? r.criterio;
           const hasExplicitMatchType =
             rawMatchType !== undefined && String(rawMatchType).trim().length > 0;
-          const rotuloList = parseMultiValueField(r.rotulos ?? r.rotulo, "Geral");
-          const categoriaList = parseMultiValueField(r.categorias ?? r.categoria, "Outro");
+          const acao = normalizeRuleAction(r.acao ?? r.action);
+          const rotuloList =
+            acao === "Ignorar"
+              ? []
+              : parseMultiValueField(r.rotulos ?? r.rotulo, "Geral");
+          const categoriaList =
+            acao === "Ignorar"
+              ? []
+              : parseMultiValueField(r.categorias ?? r.categoria, "Outro");
           return {
             id: String(r.id ?? `rule-${index}-${uuid()}`),
             ativo: r.ativo !== false && r.ativa !== false && r.ativo !== "false",
@@ -919,6 +965,7 @@
               : inferMatchTypeFromCondicao(condicao),
             matchValue: condicao,
             condicao,
+            acao,
             rotulo: rotuloList.join(", "),
             categoria: categoriaList.join(", "),
           };
@@ -941,7 +988,11 @@
             demandas: rawDemandas.map((item, idx) => normalizeTask(item, idx)),
             regras: rawRegras
               .map((item, idx) => normalizeRule(item, idx))
-              .filter((r) => (r.condicao || r.matchValue).length > 0 && r.rotulo.length > 0),
+              .filter(
+                (r) =>
+                  (r.condicao || r.matchValue).length > 0 &&
+                  (r.acao === "Ignorar" || r.rotulo.length > 0)
+              ),
             categorias: rawCategorias,
           };
         }
@@ -1060,7 +1111,11 @@
             regras: hasRegras
               ? container.regras
                   .map((item, idx) => normalizeRule(item, idx))
-                  .filter((r) => (r.condicao || r.matchValue).length > 0 && r.rotulo.length > 0)
+                  .filter(
+                    (r) =>
+                      (r.condicao || r.matchValue).length > 0 &&
+                      (r.acao === "Ignorar" || r.rotulo.length > 0)
+                  )
               : null,
             categorias: Array.isArray(container.categorias)
               ? container.categorias.map((c) => String(c ?? "").trim()).filter(Boolean)
@@ -1121,16 +1176,22 @@
         async function postSaveRulesToGas(regras) {
           const listaFormatada = (regras || []).map((r) => {
             const condicao = String(r.condicao ?? r.matchValue ?? "").trim();
+            const acao = normalizeRuleAction(r.acao);
+            if (acao === "Ignorar") {
+              return {
+                condicao,
+                rotulo: "",
+                categoria: "",
+                acao: "Ignorar",
+              };
+            }
             const rotulo = parseMultiValueField(r.rotulo, "Geral").join(", ");
             const categoria = parseMultiValueField(r.categoria, "Outro").join(", ");
             return {
               condicao,
               rotulo,
               categoria,
-              id: r.id,
-              ativo: r.ativo,
-              matchType: r.matchType,
-              matchValue: condicao,
+              acao: "Classificar",
             };
           });
 
@@ -1185,6 +1246,9 @@
           urgencyFilter: "Todas",
           labelFilter: "Todos",
           categoryFilter: "Todas",
+          receivedDateFrom: "",
+          receivedDateTo: "",
+          isFiltersOpen: false,
           sortBy: "prazo_asc",
           editingObsTaskId: null,
           obsDraft: "",
@@ -1221,6 +1285,7 @@
           editRuleCategoriaDraft: "",
           ruleFormMatchType: "dominio",
           ruleFormMatchValue: "",
+          ruleFormAction: "Classificar",
           ruleFormRotulos: [],
           ruleFormCategorias: [initialCategories[0] || "Outro"],
           ruleFormRotuloDraft: "",
@@ -1252,6 +1317,7 @@
             for (const part of parseMultiValueField(c, "")) tryAdd(part);
           }
           for (const r of rules || []) {
+            if (r.acao === "Ignorar") continue;
             for (const part of parseMultiValueField(r.categoria, "")) tryAdd(part);
           }
           for (const t of tasks || []) {
@@ -1266,6 +1332,7 @@
             for (const part of parseMultiValueField(lbl, "")) set.add(part);
           }
           for (const r of rules) {
+            if (r.acao === "Ignorar") continue;
             for (const part of parseMultiValueField(r.rotulo, "")) set.add(part);
           }
           for (const t of tasks) {
@@ -1375,6 +1442,14 @@
           return 1;
         }
 
+        function getTaskReceivedIsoDate(task) {
+          const raw = String(
+            task.data_email_original || task.data_hora_email_original || ""
+          ).trim();
+          const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+          return match ? match[1] : "";
+        }
+
         function getFilteredTasks() {
           const q = state.search.trim().toLowerCase();
           const availableLabels = getAvailableLabels();
@@ -1398,6 +1473,12 @@
             if (activeLabelFilter !== "Todos" && !taskLabels.includes(activeLabelFilter)) return false;
             if (activeCategoryFilter !== "Todas" && !taskCategories.includes(activeCategoryFilter)) {
               return false;
+            }
+            if (state.receivedDateFrom || state.receivedDateTo) {
+              const recIso = getTaskReceivedIsoDate(task);
+              if (!recIso) return false;
+              if (state.receivedDateFrom && recIso < state.receivedDateFrom) return false;
+              if (state.receivedDateTo && recIso > state.receivedDateTo) return false;
             }
             if (q) {
               const historyText = (task.historico_mensagens || [])
@@ -1747,6 +1828,37 @@
           return `<span class="inline-flex items-center gap-1.5 text-xs font-medium whitespace-nowrap ${cfg.text}">
             <span class="w-2 h-2 rounded-full ${cfg.dot}"></span>
             <span>${escapeHtml(level)}</span>
+          </span>`;
+        }
+
+        function renderCardUrgencyIndicator(level) {
+          const configs = {
+            Alta: {
+              icon: "chevrons-up",
+              iconCls: "text-red-500 dark:text-red-400",
+              badgeCls:
+                "text-red-600 dark:text-red-400 bg-red-50/70 dark:bg-red-950/40 border-red-200/80 dark:border-red-900/60",
+              label: "Alta",
+            },
+            Média: {
+              icon: "minus",
+              iconCls: "text-amber-500 dark:text-amber-400",
+              badgeCls:
+                "text-amber-600 dark:text-amber-400 bg-amber-50/70 dark:bg-amber-950/40 border-amber-200/80 dark:border-amber-900/60",
+              label: "Média",
+            },
+            Baixa: {
+              icon: "chevrons-down",
+              iconCls: "text-emerald-500 dark:text-emerald-400",
+              badgeCls:
+                "text-emerald-600 dark:text-emerald-400 bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200/80 dark:border-emerald-900/60",
+              label: "Baixa",
+            },
+          };
+          const cfg = configs[level] || configs["Baixa"];
+          return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-semibold rounded-md border whitespace-nowrap shrink-0 ${cfg.badgeCls}">
+            <i data-lucide="${cfg.icon}" class="w-3.5 h-3.5 shrink-0 ${cfg.iconCls}"></i>
+            <span>${cfg.label}</span>
           </span>`;
         }
 
@@ -2544,14 +2656,20 @@
             </button>`;
           }).join("");
 
+          const activeFiltersCount =
+            (state.receivedDateFrom || state.receivedDateTo ? 1 : 0) +
+            (activeLabelFilter !== "Todos" ? 1 : 0) +
+            (activeCategoryFilter !== "Todas" ? 1 : 0) +
+            (state.urgencyFilter !== "Todas" ? 1 : 0);
+
           const urgencyTabsHtml = ["Todas", "Alta", "Média", "Baixa"]
             .map((lvl) => {
               const active = state.urgencyFilter === lvl;
               return `<button type="button" data-action="urgency-filter" data-value="${lvl}"
-                class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                class="px-2 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
                   active
-                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-100"
-                    : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
+                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100"
+                    : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                 }">${lvl}</button>`;
             })
             .join("");
@@ -2601,7 +2719,8 @@
               Boolean(state.search.trim()) ||
               state.urgencyFilter !== "Todas" ||
               activeLabelFilter !== "Todos" ||
-              activeCategoryFilter !== "Todas";
+              activeCategoryFilter !== "Todas" ||
+              Boolean(state.receivedDateFrom || state.receivedDateTo);
             if (hasSecondaryFilters) {
               listHtml = `
                 <div class="py-12 px-6 text-center">
@@ -2680,6 +2799,17 @@
                   const isSubtasksExpanded = Boolean(state.expandedSubtasks[task.id]);
                   const isSelected = !state.isPrintMode && selectedTask && selectedTask.id === task.id;
                   const isPrintChecked = printSelectedSet.has(task.id);
+                  const senderDisplay = getSenderDisplay(task);
+                  const rawSubject = String(
+                    task.assunto_normalizado || task.assunto_original || ""
+                  ).trim();
+                  const subjectDisplay =
+                    normalizeEmailSubject(rawSubject) || rawSubject || "Sem assunto";
+                  const receivedDisplay = formatReceivedDateTime(
+                    task.data_hora_email_original,
+                    task.data_email_original,
+                    "Sem data"
+                  );
 
                   let rowClass = "hover:bg-slate-50/80 dark:hover:bg-slate-800/40";
                   if (state.isPrintMode && isPrintChecked) {
@@ -2768,56 +2898,62 @@
                             : ""
                         }
                         <div class="min-w-0 flex-1 space-y-2">
-                          <div class="flex flex-wrap items-center gap-2">
-                            <div data-stop-row>
-                              <select data-role="task-status-select" data-id="${escapeHtml(task.id)}"
-                                aria-label="Alterar status de ${escapeHtml(task.titulo)}"
-                                class="px-2 py-0.5 text-xs font-medium rounded-md border focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer ${statusSelectCls}">
-                                ${statusOptionsHtml}
-                              </select>
+                          <div class="flex items-start justify-between gap-2">
+                            <div class="flex flex-wrap items-center gap-2 min-w-0 flex-1">
+                              <div data-stop-row>
+                                <select data-role="task-status-select" data-id="${escapeHtml(task.id)}"
+                                  aria-label="Alterar status de ${escapeHtml(task.titulo)}"
+                                  class="px-2 py-0.5 text-xs font-medium rounded-md border focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer ${statusSelectCls}">
+                                  ${statusOptionsHtml}
+                                </select>
+                              </div>
+
+                              ${renderInlineDeadlineBadge(task.prazo, isCompleted, task.id, "list")}
+
+                              ${renderCheckboxPopover({
+                                scope: "card",
+                                taskId: task.id,
+                                mode: "label",
+                                selected: taskLabels,
+                                options: availableLabels,
+                                isOpen: isLabelPickerOpen,
+                              })}
+
+                              ${renderCheckboxPopover({
+                                scope: "card",
+                                taskId: task.id,
+                                mode: "category",
+                                selected: taskCategories,
+                                options: availableCategories,
+                                isOpen: isCategoryPickerOpen,
+                              })}
+
+                              ${
+                                isNewDemand
+                                  ? `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/70 rounded-md">
+                                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" aria-hidden="true"></span>
+                                      <span>Novo</span>
+                                    </span>`
+                                  : ""
+                              }
+
+                              ${
+                                task.hasNewMessage
+                                  ? `<button type="button" data-action="mark-seen" data-id="${escapeHtml(
+                                      task.id
+                                    )}" title="Clique para marcar nova mensagem como vista"
+                                      class="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-blue-800 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800/70 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/60 transition-colors cursor-pointer">
+                                      <i data-lucide="bell-ring" class="w-3 h-3 shrink-0"></i>
+                                      <span>Nova mensagem</span>
+                                      <i data-lucide="check" class="w-3 h-3 ml-0.5 opacity-70"></i>
+                                    </button>`
+                                  : ""
+                              }
                             </div>
 
-                            ${renderInlineDeadlineBadge(task.prazo, isCompleted, task.id, "list")}
-
-                            ${renderCheckboxPopover({
-                              scope: "card",
-                              taskId: task.id,
-                              mode: "label",
-                              selected: taskLabels,
-                              options: availableLabels,
-                              isOpen: isLabelPickerOpen,
-                            })}
-
-                            ${renderCheckboxPopover({
-                              scope: "card",
-                              taskId: task.id,
-                              mode: "category",
-                              selected: taskCategories,
-                              options: availableCategories,
-                              isOpen: isCategoryPickerOpen,
-                            })}
-
-                            ${
-                              isNewDemand
-                                ? `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/70 rounded-md">
-                                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" aria-hidden="true"></span>
-                                    <span>Novo</span>
-                                  </span>`
-                                : ""
-                            }
-
-                            ${
-                              task.hasNewMessage
-                                ? `<button type="button" data-action="mark-seen" data-id="${escapeHtml(
-                                    task.id
-                                  )}" title="Clique para marcar nova mensagem como vista"
-                                    class="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-blue-800 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800/70 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/60 transition-colors cursor-pointer">
-                                    <i data-lucide="bell-ring" class="w-3 h-3 shrink-0"></i>
-                                    <span>Nova mensagem</span>
-                                    <i data-lucide="check" class="w-3 h-3 ml-0.5 opacity-70"></i>
-                                  </button>`
-                                : ""
-                            }
+                            <div class="shrink-0 ml-auto pt-0.5">
+                              ${renderCardUrgencyIndicator(task.urgencia)}
+                            </div>
                           </div>
 
                           <h3 class="text-sm font-semibold leading-snug ${
@@ -2825,6 +2961,29 @@
                               ? "line-through text-slate-500 dark:text-slate-500"
                               : "text-slate-900 dark:text-slate-100"
                           }">${escapeHtml(task.titulo)}</h3>
+
+                          <div class="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 dark:text-slate-400 min-w-0">
+                            <div class="flex items-center gap-1.5 min-w-0 shrink-0 max-w-full sm:max-w-[180px]" title="${escapeHtml(
+                              senderDisplay
+                            )}">
+                              <i data-lucide="user" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0"></i>
+                              <span class="font-medium text-slate-700 dark:text-slate-300 truncate">${escapeHtml(
+                                senderDisplay
+                              )}</span>
+                            </div>
+                            <div class="flex items-center gap-1.5 min-w-0 flex-1 basis-36 sm:basis-auto" title="${escapeHtml(
+                              subjectDisplay
+                            )}">
+                              <i data-lucide="mail" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0"></i>
+                              <span class="text-slate-600 dark:text-slate-300 truncate">${escapeHtml(
+                                subjectDisplay
+                              )}</span>
+                            </div>
+                            <div class="flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums whitespace-nowrap shrink-0">
+                              <i data-lucide="clock" class="w-3 h-3 text-slate-400 dark:text-slate-500 shrink-0"></i>
+                              <span>${escapeHtml(receivedDisplay)}</span>
+                            </div>
+                          </div>
 
                           ${inlineSubtasksHtml}
                         </div>
@@ -2866,45 +3025,14 @@
                   </div>
 
                   <div class="flex flex-wrap items-center justify-between gap-2.5">
-                    <div class="flex flex-wrap items-center gap-2 flex-1 min-w-[220px]">
-                      <div class="relative flex-1 min-w-[200px] max-w-xs">
-                        <i data-lucide="search" class="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
-                        <input type="search" id="task-search-input" value="${escapeHtml(state.search)}"
-                          placeholder="Buscar demanda, rótulo ou subtarefa..."
-                          class="w-full pl-9 pr-3 py-1.5 text-xs sm:text-sm text-slate-900 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
-                      </div>
-                      <div class="relative flex items-center">
-                        <i data-lucide="tag" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
-                        <label for="filter-rotulo-select" class="sr-only">Filtrar por rótulo</label>
-                        <select id="filter-rotulo-select" data-role="label-filter"
-                          class="pl-8 pr-6 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
-                          <option value="Todos" ${activeLabelFilter === "Todos" ? "selected" : ""}>Todos os rótulos</option>
-                          ${availableLabels
-                            .map(
-                              (lbl) =>
-                                `<option value="${escapeHtml(lbl)}" ${
-                                  activeLabelFilter === lbl ? "selected" : ""
-                                }>${escapeHtml(lbl)}</option>`
-                            )
-                            .join("")}
-                        </select>
-                      </div>
-                      <div class="relative flex items-center">
-                        <i data-lucide="folder" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
-                        <label for="filter-categoria-select" class="sr-only">Filtrar por categoria</label>
-                        <select id="filter-categoria-select" data-role="category-filter"
-                          class="pl-8 pr-6 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 cursor-pointer">
-                          <option value="Todas" ${activeCategoryFilter === "Todas" ? "selected" : ""}>Todas as categorias</option>
-                          ${availableCategories
-                            .map(
-                              (cat) =>
-                                `<option value="${escapeHtml(cat)}" ${
-                                  activeCategoryFilter === cat ? "selected" : ""
-                                }>${escapeHtml(cat)}</option>`
-                            )
-                            .join("")}
-                        </select>
-                      </div>
+                    <div class="relative flex-1 min-w-[200px]">
+                      <i data-lucide="search" class="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+                      <input type="search" id="task-search-input" value="${escapeHtml(state.search)}"
+                        placeholder="Buscar demanda, rótulo ou subtarefa..."
+                        class="w-full pl-9 pr-3 py-1.5 text-xs sm:text-sm text-slate-900 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:placeholder:text-slate-500 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20" />
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-2">
                       <div class="relative flex items-center">
                         <i data-lucide="arrow-up-down" class="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 pointer-events-none"></i>
                         <label for="queue-sort-select" class="sr-only">Ordenar fila de demandas</label>
@@ -2918,9 +3046,119 @@
                           ).join("")}
                         </select>
                       </div>
-                    </div>
-                    <div class="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/90 rounded-lg">
-                      ${urgencyTabsHtml}
+
+                      <div class="relative" data-filters-root>
+                        <button type="button" data-action="toggle-filters-popover"
+                          aria-expanded="${state.isFiltersOpen ? "true" : "false"}" aria-haspopup="dialog"
+                          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                            activeFiltersCount > 0 || state.isFiltersOpen
+                              ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800/80"
+                              : "text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-700"
+                          }">
+                          <i data-lucide="filter" class="w-3.5 h-3.5 shrink-0"></i>
+                          <span>Filtros</span>
+                          ${
+                            activeFiltersCount > 0
+                              ? `<span class="px-1.5 py-0.5 text-[10px] font-semibold font-mono tabular-nums rounded-md bg-blue-600 text-white dark:bg-blue-500">${activeFiltersCount}</span>`
+                              : ""
+                          }
+                        </button>
+
+                        ${
+                          state.isFiltersOpen
+                            ? `<div role="dialog" aria-label="Filtros da fila de demandas"
+                                class="absolute right-0 top-full mt-2 z-30 w-[min(calc(100vw-3rem),340px)] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg p-4 space-y-3.5">
+                                <div class="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                                  <span class="text-xs font-semibold text-slate-900 dark:text-slate-100">Filtros avançados</span>
+                                  <button type="button" data-action="close-filters-popover" aria-label="Fechar painel de filtros"
+                                    class="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-md cursor-pointer">
+                                    <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                                  </button>
+                                </div>
+
+                                <div class="space-y-1.5">
+                                  <span class="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                    Data de recebimento
+                                  </span>
+                                  <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <label for="filter-received-from" class="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">De:</label>
+                                      <input id="filter-received-from" type="date" data-role="received-date-from" value="${escapeHtml(
+                                        state.receivedDateFrom
+                                      )}"
+                                        class="w-full px-2 py-1.5 text-xs text-slate-800 dark:text-slate-100 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:bg-white dark:focus:bg-slate-950 focus:border-blue-600 dark:focus:border-blue-500" />
+                                    </div>
+                                    <div>
+                                      <label for="filter-received-to" class="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">Até:</label>
+                                      <input id="filter-received-to" type="date" data-role="received-date-to" value="${escapeHtml(
+                                        state.receivedDateTo
+                                      )}"
+                                        class="w-full px-2 py-1.5 text-xs text-slate-800 dark:text-slate-100 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:bg-white dark:focus:bg-slate-950 focus:border-blue-600 dark:focus:border-blue-500" />
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div class="space-y-1.5">
+                                  <label for="filter-rotulo-select" class="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                    Rótulos
+                                  </label>
+                                  <select id="filter-rotulo-select" data-role="label-filter"
+                                    class="w-full px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none cursor-pointer">
+                                    <option value="Todos" ${activeLabelFilter === "Todos" ? "selected" : ""}>Todos os rótulos</option>
+                                    ${availableLabels
+                                      .map(
+                                        (lbl) =>
+                                          `<option value="${escapeHtml(lbl)}" ${
+                                            activeLabelFilter === lbl ? "selected" : ""
+                                          }>${escapeHtml(lbl)}</option>`
+                                      )
+                                      .join("")}
+                                  </select>
+                                </div>
+
+                                <div class="space-y-1.5">
+                                  <label for="filter-categoria-select" class="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                    Categorias
+                                  </label>
+                                  <select id="filter-categoria-select" data-role="category-filter"
+                                    class="w-full px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:focus:bg-slate-950 dark:focus:border-blue-500 rounded-lg focus:outline-none cursor-pointer">
+                                    <option value="Todas" ${activeCategoryFilter === "Todas" ? "selected" : ""}>Todas as categorias</option>
+                                    ${availableCategories
+                                      .map(
+                                        (cat) =>
+                                          `<option value="${escapeHtml(cat)}" ${
+                                            activeCategoryFilter === cat ? "selected" : ""
+                                          }>${escapeHtml(cat)}</option>`
+                                      )
+                                      .join("")}
+                                  </select>
+                                </div>
+
+                                <div class="space-y-1.5">
+                                  <span class="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                    Urgência
+                                  </span>
+                                  <div class="grid grid-cols-4 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
+                                    ${urgencyTabsHtml}
+                                  </div>
+                                </div>
+
+                                <div class="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+                                  <button type="button" data-action="reset-popover-filters" ${
+                                    activeFiltersCount === 0 ? "disabled" : ""
+                                  }
+                                    class="text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline disabled:opacity-40 disabled:no-underline cursor-pointer">
+                                    Limpar filtros
+                                  </button>
+                                  <button type="button" data-action="close-filters-popover"
+                                    class="px-3 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-md transition-colors cursor-pointer">
+                                    Concluir
+                                  </button>
+                                </div>
+                              </div>`
+                            : ""
+                        }
+                      </div>
                     </div>
                   </div>
                   ${printActionBarHtml}
@@ -2980,13 +3218,14 @@
                         .map((rule) => {
                           if (state.editingRuleId === rule.id && state.editRuleDraft) {
                             const d = state.editRuleDraft;
+                            const isEditIgnore = normalizeRuleAction(d.acao) === "Ignorar";
                             return `
                               <tr class="bg-blue-50/40 dark:bg-blue-950/30 align-top">
                                 <td class="py-2.5 pl-6 pr-3 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">${
                                   d.ativo ? "Ativa" : "Pausada"
                                 }</td>
-                                <td class="py-2.5 px-3">
-                                  <select data-role="edit-rule-matchType" class="px-2 py-1 text-xs text-slate-900 bg-white border border-slate-300 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 rounded-md">
+                                <td class="py-2.5 px-3 space-y-1.5">
+                                  <select data-role="edit-rule-matchType" aria-label="Critério da regra" class="w-full px-2 py-1 text-xs text-slate-900 bg-white border border-slate-300 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 rounded-md">
                                     ${Object.keys(MATCH_TYPE_LABELS)
                                       .map(
                                         (k) =>
@@ -2996,6 +3235,16 @@
                                       )
                                       .join("")}
                                   </select>
+                                  <select data-role="edit-rule-acao" aria-label="Ação da regra" class="w-full px-2 py-1 text-xs text-slate-900 bg-white border border-slate-300 dark:text-slate-100 dark:bg-slate-800 dark:border-slate-700 rounded-md">
+                                    ${RULE_ACTION_OPTIONS.map(
+                                      (opt) =>
+                                        `<option value="${opt.value}" ${
+                                          (isEditIgnore ? "Ignorar" : "Classificar") === opt.value
+                                            ? "selected"
+                                            : ""
+                                        }>${escapeHtml(opt.label)}</option>`
+                                    ).join("")}
+                                  </select>
                                 </td>
                                 <td class="py-2.5 px-3">
                                   <input type="text" data-role="edit-rule-matchValue" value="${escapeHtml(
@@ -3003,29 +3252,40 @@
                                   )}" class="w-full min-w-[140px] px-2 py-1 font-mono text-xs text-slate-900 bg-white border border-slate-300 dark:text-slate-100 dark:bg-slate-950 dark:border-slate-700 rounded-md" />
                                 </td>
                                 <td class="py-2.5 px-3 min-w-[200px]">
-                                  ${renderMultiTagInput({
-                                    context: "edit-rule-rotulo",
-                                    tags: d.rotulos,
-                                    draft: state.editRuleRotuloDraft,
-                                    datalistId: "rules-rotulo-options",
-                                    placeholder: "Adicionar rótulo...",
-                                    useLabelColors: true,
-                                    compact: true,
-                                    ariaLabel: "Editar rótulos da regra",
-                                  })}
+                                  ${
+                                    isEditIgnore
+                                      ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-md border text-red-700 bg-red-50 border-red-200 dark:text-red-300 dark:bg-red-950/50 dark:border-red-900/70 whitespace-nowrap">
+                                          <i data-lucide="ban" class="w-3 h-3 shrink-0"></i>
+                                          <span>Ignorar e-mail</span>
+                                        </span>`
+                                      : renderMultiTagInput({
+                                          context: "edit-rule-rotulo",
+                                          tags: d.rotulos,
+                                          draft: state.editRuleRotuloDraft,
+                                          datalistId: "rules-rotulo-options",
+                                          placeholder: "Adicionar rótulo...",
+                                          useLabelColors: true,
+                                          compact: true,
+                                          ariaLabel: "Editar rótulos da regra",
+                                        })
+                                  }
                                 </td>
                                 <td class="py-2.5 px-3 min-w-[200px]">
-                                  ${renderMultiTagInput({
-                                    context: "edit-rule-categoria",
-                                    tags: d.categorias,
-                                    draft: state.editRuleCategoriaDraft,
-                                    datalistId: "rules-categoria-options",
-                                    placeholder: "Adicionar categoria...",
-                                    fallbackDisplay: "Outro",
-                                    useLabelColors: false,
-                                    compact: true,
-                                    ariaLabel: "Editar categorias da regra",
-                                  })}
+                                  ${
+                                    isEditIgnore
+                                      ? `<span class="text-xs text-slate-400 dark:text-slate-500">Descartado na sincronização</span>`
+                                      : renderMultiTagInput({
+                                          context: "edit-rule-categoria",
+                                          tags: d.categorias,
+                                          draft: state.editRuleCategoriaDraft,
+                                          datalistId: "rules-categoria-options",
+                                          placeholder: "Adicionar categoria...",
+                                          fallbackDisplay: "Outro",
+                                          useLabelColors: false,
+                                          compact: true,
+                                          ariaLabel: "Editar categorias da regra",
+                                        })
+                                  }
                                 </td>
                                 <td class="py-2.5 pl-3 pr-6 text-right whitespace-nowrap">
                                   <div class="inline-flex items-center gap-1">
@@ -3043,8 +3303,16 @@
                             `;
                           }
 
-                          const ruleLabels = parseMultiValueField(rule.rotulo, "Geral");
-                          const ruleCategories = parseMultiValueField(rule.categoria, "Outro");
+                          const isIgnore = normalizeRuleAction(rule.acao) === "Ignorar";
+                          const ruleLabels = isIgnore
+                            ? []
+                            : parseMultiValueField(rule.rotulo, "Geral");
+                          const ruleCategories = isIgnore
+                            ? []
+                            : parseMultiValueField(rule.categoria, "Outro");
+                          const ruleAriaDesc = isIgnore
+                            ? `Ignorar ${rule.matchValue}`
+                            : rule.rotulo;
 
                           return `
                             <tr class="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors ${
@@ -3063,49 +3331,67 @@
                               <td class="py-3 px-3 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">${escapeHtml(
                                 MATCH_TYPE_LABELS[rule.matchType] || rule.matchType
                               )}</td>
-                              <td class="py-3 px-3 font-mono text-xs text-slate-900 dark:text-slate-100">${escapeHtml(
-                                rule.matchValue
-                              )}</td>
-                              <td class="py-3 px-3">
-                                <div class="flex flex-wrap items-center gap-1">
-                                  ${ruleLabels
-                                    .map(
-                                      (lbl) =>
-                                        `<span style="${getLabelBadgeStyleAttr(
-                                          lbl,
-                                          state.labelColors
-                                        )}" class="inline-flex items-center px-2 py-0.5 text-xs font-medium border rounded-md whitespace-nowrap">${escapeHtml(
-                                          lbl
-                                        )}</span>`
-                                    )
-                                    .join("")}
+                              <td class="py-3 px-3 font-mono text-xs text-slate-900 dark:text-slate-100">
+                                <div class="flex flex-wrap items-center gap-2">
+                                  <span>${escapeHtml(rule.matchValue)}</span>
+                                  ${
+                                    isIgnore
+                                      ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 font-sans text-[11px] font-medium rounded-md border text-red-700 bg-red-50 border-red-200 dark:text-red-300 dark:bg-red-950/50 dark:border-red-900/70 whitespace-nowrap">
+                                          <i data-lucide="ban" class="w-3 h-3 shrink-0"></i>
+                                          <span>Ignorar e-mail</span>
+                                        </span>`
+                                      : ""
+                                  }
                                 </div>
                               </td>
                               <td class="py-3 px-3">
-                                <div class="flex flex-wrap items-center gap-1">
-                                  ${ruleCategories
-                                    .map(
-                                      (cat) =>
-                                        `<span class="inline-flex items-center px-2 py-0.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 rounded-md whitespace-nowrap">${escapeHtml(
-                                          cat
-                                        )}</span>`
-                                    )
-                                    .join("")}
-                                </div>
+                                ${
+                                  isIgnore
+                                    ? `<span class="text-xs text-slate-400 dark:text-slate-500">—</span>`
+                                    : `<div class="flex flex-wrap items-center gap-1">
+                                        ${ruleLabels
+                                          .map(
+                                            (lbl) =>
+                                              `<span style="${getLabelBadgeStyleAttr(
+                                                lbl,
+                                                state.labelColors
+                                              )}" class="inline-flex items-center px-2 py-0.5 text-xs font-medium border rounded-md whitespace-nowrap">${escapeHtml(
+                                                lbl
+                                              )}</span>`
+                                          )
+                                          .join("")}
+                                      </div>`
+                                }
+                              </td>
+                              <td class="py-3 px-3">
+                                ${
+                                  isIgnore
+                                    ? `<span class="text-xs text-slate-400 dark:text-slate-500">—</span>`
+                                    : `<div class="flex flex-wrap items-center gap-1">
+                                        ${ruleCategories
+                                          .map(
+                                            (cat) =>
+                                              `<span class="inline-flex items-center px-2 py-0.5 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 dark:text-slate-200 dark:bg-slate-800 dark:border-slate-700 rounded-md whitespace-nowrap">${escapeHtml(
+                                                cat
+                                              )}</span>`
+                                          )
+                                          .join("")}
+                                      </div>`
+                                }
                               </td>
                               <td class="py-3 pl-3 pr-6 text-right whitespace-nowrap">
                                 <div class="inline-flex items-center gap-1">
                                   <button type="button" data-action="edit-rule" data-id="${escapeHtml(
                                     rule.id
                                   )}" aria-label="Editar regra ${escapeHtml(
-                                    rule.rotulo
+                                    ruleAriaDesc
                                   )}" class="p-1.5 text-slate-400 hover:text-blue-700 rounded-md hover:bg-slate-100 dark:text-slate-500 dark:hover:text-blue-400 dark:hover:bg-slate-800 transition-colors cursor-pointer">
                                     <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                                   </button>
                                   <button type="button" data-action="delete-rule" data-id="${escapeHtml(
                                     rule.id
                                   )}" aria-label="Remover regra ${escapeHtml(
-                                    rule.rotulo
+                                    ruleAriaDesc
                                   )}" class="p-1.5 text-slate-400 hover:text-red-700 rounded-md hover:bg-red-50 dark:text-slate-500 dark:hover:text-red-400 dark:hover:bg-red-950/50 transition-colors cursor-pointer">
                                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                                   </button>
@@ -3290,50 +3576,70 @@
 
                 <form id="create-rule-form" class="p-6 border-b border-slate-200 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-800/40 space-y-3">
                   <div class="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                    <div class="sm:col-span-4">
+                    <div class="sm:col-span-3">
                       <label for="rule-match-type" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Critério</label>
                       <select id="rule-match-type" class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-900 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500">
                         ${matchOptions}
                       </select>
                     </div>
-                    <div class="sm:col-span-8">
+                    <div class="sm:col-span-5">
                       <label for="rule-match-value" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Valor de correspondência</label>
                       <input id="rule-match-value" type="text" value="${escapeHtml(
                         state.ruleFormMatchValue
                       )}" placeholder="@fornecedor.com.br"
                         class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-900 dark:border-slate-700 dark:placeholder:text-slate-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500" />
                     </div>
+                    <div class="sm:col-span-4">
+                      <label for="rule-action-select" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Ação da regra</label>
+                      <select id="rule-action-select" class="w-full px-2.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 dark:text-slate-100 dark:bg-slate-900 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 dark:focus:border-blue-500">
+                        ${RULE_ACTION_OPTIONS.map(
+                          (opt) =>
+                            `<option value="${opt.value}" ${
+                              normalizeRuleAction(state.ruleFormAction) === opt.value
+                                ? "selected"
+                                : ""
+                            }>${escapeHtml(opt.label)}</option>`
+                        ).join("")}
+                      </select>
+                    </div>
                   </div>
                   <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
-                    <div class="sm:col-span-5">
-                      <label for="rule-rotulo-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Rótulos aplicados</label>
-                      ${renderMultiTagInput({
-                        context: "rule-rotulo",
-                        tags: state.ruleFormRotulos,
-                        draft: state.ruleFormRotuloDraft,
-                        datalistId: "rules-rotulo-options",
-                        placeholder: "Ex: Jurídico, Gabinete...",
-                        useLabelColors: true,
-                        compact: true,
-                        inputId: "rule-rotulo-input",
-                        ariaLabel: "Rótulos da regra",
-                      })}
-                    </div>
-                    <div class="sm:col-span-5">
-                      <label for="rule-categoria-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Categorias</label>
-                      ${renderMultiTagInput({
-                        context: "rule-categoria",
-                        tags: state.ruleFormCategorias,
-                        draft: state.ruleFormCategoriaDraft,
-                        datalistId: "rules-categoria-options",
-                        placeholder: "Ex: Revisão, Jurídico...",
-                        fallbackDisplay: "Outro",
-                        useLabelColors: false,
-                        compact: true,
-                        inputId: "rule-categoria-input",
-                        ariaLabel: "Categorias da regra",
-                      })}
-                    </div>
+                    ${
+                      normalizeRuleAction(state.ruleFormAction) === "Ignorar"
+                        ? `<div class="sm:col-span-10 flex items-center gap-2 px-3 py-2 text-xs text-red-700 dark:text-red-300 bg-red-50/80 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 rounded-lg">
+                            <i data-lucide="ban" class="w-3.5 h-3.5 shrink-0"></i>
+                            <span>E-mails correspondentes serão ignorados e descartados automaticamente na sincronização, sem exigir rótulo ou categoria.</span>
+                          </div>`
+                        : `<div class="sm:col-span-5">
+                            <label for="rule-rotulo-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Rótulos aplicados</label>
+                            ${renderMultiTagInput({
+                              context: "rule-rotulo",
+                              tags: state.ruleFormRotulos,
+                              draft: state.ruleFormRotuloDraft,
+                              datalistId: "rules-rotulo-options",
+                              placeholder: "Ex: Jurídico, Gabinete...",
+                              useLabelColors: true,
+                              compact: true,
+                              inputId: "rule-rotulo-input",
+                              ariaLabel: "Rótulos da regra",
+                            })}
+                          </div>
+                          <div class="sm:col-span-5">
+                            <label for="rule-categoria-input" class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Categorias</label>
+                            ${renderMultiTagInput({
+                              context: "rule-categoria",
+                              tags: state.ruleFormCategorias,
+                              draft: state.ruleFormCategoriaDraft,
+                              datalistId: "rules-categoria-options",
+                              placeholder: "Ex: Revisão, Jurídico...",
+                              fallbackDisplay: "Outro",
+                              useLabelColors: false,
+                              compact: true,
+                              inputId: "rule-categoria-input",
+                              ariaLabel: "Categorias da regra",
+                            })}
+                          </div>`
+                    }
                     <div class="sm:col-span-2 flex justify-end">
                       <button type="submit"
                         class="w-full inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-semibold text-white bg-blue-700 dark:bg-blue-600 rounded-lg hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer">
@@ -4060,6 +4366,7 @@
 
           let rulesChanged = false;
           const nextRules = state.rules.map((r) => {
+            if (normalizeRuleAction(r.acao) === "Ignorar") return r;
             const items = parseMultiValueField(r.rotulo, "Geral");
             if (items.includes(oldLabel)) {
               rulesChanged = true;
@@ -4124,6 +4431,7 @@
 
           let rulesChanged = false;
           const nextRules = state.rules.map((r) => {
+            if (normalizeRuleAction(r.acao) === "Ignorar") return r;
             const items = parseMultiValueField(r.rotulo, "Geral");
             if (items.includes(labelToDelete)) {
               rulesChanged = true;
@@ -4541,6 +4849,19 @@
           } else if (action === "urgency-filter") {
             state.urgencyFilter = btn.dataset.value;
             render();
+          } else if (action === "toggle-filters-popover") {
+            state.isFiltersOpen = !state.isFiltersOpen;
+            render();
+          } else if (action === "close-filters-popover") {
+            state.isFiltersOpen = false;
+            render();
+          } else if (action === "reset-popover-filters") {
+            state.urgencyFilter = "Todas";
+            state.labelFilter = "Todos";
+            state.categoryFilter = "Todas";
+            state.receivedDateFrom = "";
+            state.receivedDateTo = "";
+            render();
           } else if (action === "clear-filters") {
             state.search = "";
             if (state.statusFilter !== "Concluído") {
@@ -4549,6 +4870,8 @@
             state.urgencyFilter = "Todas";
             state.labelFilter = "Todos";
             state.categoryFilter = "Todas";
+            state.receivedDateFrom = "";
+            state.receivedDateTo = "";
             render();
           } else if (action === "export-csv") {
             exportCsv();
@@ -4932,11 +5255,15 @@
           } else if (action === "edit-rule") {
             const rule = state.rules.find((r) => r.id === btn.dataset.id);
             if (rule) {
+              const isIgnore = normalizeRuleAction(rule.acao) === "Ignorar";
               state.editingRuleId = rule.id;
               state.editRuleDraft = {
                 ...rule,
-                rotulos: parseMultiValueField(rule.rotulo, "Geral"),
-                categorias: parseMultiValueField(rule.categoria, "Outro"),
+                acao: isIgnore ? "Ignorar" : "Classificar",
+                rotulos: isIgnore ? [] : parseMultiValueField(rule.rotulo, "Geral"),
+                categorias: isIgnore
+                  ? []
+                  : parseMultiValueField(rule.categoria, "Outro"),
               };
               state.editRuleRotuloDraft = "";
               state.editRuleCategoriaDraft = "";
@@ -4947,15 +5274,41 @@
             const d = state.editRuleDraft;
             if (!d) return;
             const matchTypeEl = document.querySelector('[data-role="edit-rule-matchType"]');
+            const acaoEl = document.querySelector('[data-role="edit-rule-acao"]');
             const matchValueEl = document.querySelector('[data-role="edit-rule-matchValue"]');
             const matchValue = matchValueEl ? matchValueEl.value.trim() : d.matchValue.trim();
+            const nextAction = normalizeRuleAction(acaoEl ? acaoEl.value : d.acao);
+            if (!matchValue) return;
+
+            if (nextAction === "Ignorar") {
+              const next = state.rules.map((r) =>
+                r.id === id
+                  ? {
+                      ...r,
+                      matchType: matchTypeEl ? matchTypeEl.value : r.matchType,
+                      matchValue,
+                      condicao: matchValue,
+                      acao: "Ignorar",
+                      rotulo: "",
+                      categoria: "",
+                    }
+                  : r
+              );
+              state.editingRuleId = null;
+              state.editRuleDraft = null;
+              state.editRuleRotuloDraft = "";
+              state.editRuleCategoriaDraft = "";
+              state.rules = next;
+              void persistRules(next);
+              return;
+            }
 
             addTagToContext("edit-rule-rotulo", state.editRuleRotuloDraft, false);
             addTagToContext("edit-rule-categoria", state.editRuleCategoriaDraft, false);
 
             const rotulosFinal = normalizeTagList(d.rotulos || []);
             const categoriasFinal = normalizeTagList(d.categorias || [], "Outro");
-            if (!matchValue || rotulosFinal.length === 0) return;
+            if (rotulosFinal.length === 0) return;
 
             const next = state.rules.map((r) =>
               r.id === id
@@ -4964,6 +5317,7 @@
                     matchType: matchTypeEl ? matchTypeEl.value : r.matchType,
                     matchValue,
                     condicao: matchValue,
+                    acao: "Classificar",
                     rotulo: rotulosFinal.join(", "),
                     categoria: categoriasFinal.join(", "),
                   }
@@ -4993,6 +5347,7 @@
             saveStoredIdList(STORAGE_DELETED_CATEGORIES_KEY, []);
             const defaultRulesWithCondicao = DEFAULT_RULES.map((r) => ({
               ...r,
+              acao: "Classificar",
               condicao: r.matchValue,
             }));
             state.rules = defaultRulesWithCondicao;
@@ -5098,6 +5453,12 @@
           } else if (target.dataset.role === "category-filter") {
             state.categoryFilter = target.value;
             render();
+          } else if (target.dataset.role === "received-date-from") {
+            state.receivedDateFrom = target.value;
+            render();
+          } else if (target.dataset.role === "received-date-to") {
+            state.receivedDateTo = target.value;
+            render();
           } else if (target.dataset.role === "queue-sort") {
             state.sortBy = target.value;
             render();
@@ -5118,6 +5479,30 @@
             state.modalForm.status = target.value;
           } else if (target.id === "rule-match-type") {
             state.ruleFormMatchType = target.value;
+          } else if (target.id === "rule-action-select") {
+            state.ruleFormAction = normalizeRuleAction(target.value);
+            render();
+          } else if (target.dataset.role === "edit-rule-matchType" && state.editRuleDraft) {
+            state.editRuleDraft.matchType = target.value;
+          } else if (target.dataset.role === "edit-rule-acao" && state.editRuleDraft) {
+            const nextAction = normalizeRuleAction(target.value);
+            const matchTypeEl = document.querySelector('[data-role="edit-rule-matchType"]');
+            const matchValueEl = document.querySelector('[data-role="edit-rule-matchValue"]');
+            if (matchTypeEl) state.editRuleDraft.matchType = matchTypeEl.value;
+            if (matchValueEl) state.editRuleDraft.matchValue = matchValueEl.value;
+            state.editRuleDraft.acao = nextAction;
+            if (nextAction === "Classificar") {
+              if (!state.editRuleDraft.rotulos || state.editRuleDraft.rotulos.length === 0) {
+                state.editRuleDraft.rotulos = ["Geral"];
+              }
+              if (
+                !state.editRuleDraft.categorias ||
+                state.editRuleDraft.categorias.length === 0
+              ) {
+                state.editRuleDraft.categorias = [state.categories[0] || "Outro"];
+              }
+            }
+            render();
           }
         });
 
@@ -5433,13 +5818,40 @@
           } else if (form.id === "create-rule-form") {
             const matchType = document.getElementById("rule-match-type").value;
             const matchValue = document.getElementById("rule-match-value").value.trim();
+            const actionEl = document.getElementById("rule-action-select");
+            const ruleAction = normalizeRuleAction(
+              actionEl ? actionEl.value : state.ruleFormAction
+            );
+            if (!matchValue) return;
+
+            if (ruleAction === "Ignorar") {
+              const newRule = {
+                id: uuid(),
+                ativo: true,
+                matchType,
+                matchValue,
+                condicao: matchValue,
+                acao: "Ignorar",
+                rotulo: "",
+                categoria: "",
+              };
+              state.ruleFormMatchValue = "";
+              state.ruleFormAction = "Classificar";
+              state.ruleFormRotulos = [];
+              state.ruleFormCategorias = [state.categories[0] || "Outro"];
+              state.ruleFormRotuloDraft = "";
+              state.ruleFormCategoriaDraft = "";
+              state.rules = [newRule, ...state.rules];
+              void persistRules(state.rules);
+              return;
+            }
 
             addTagToContext("rule-rotulo", state.ruleFormRotuloDraft, false);
             addTagToContext("rule-categoria", state.ruleFormCategoriaDraft, false);
 
             const rotulosFinal = normalizeTagList(state.ruleFormRotulos);
             const categoriasFinal = normalizeTagList(state.ruleFormCategorias, "Outro");
-            if (!matchValue || rotulosFinal.length === 0) return;
+            if (rotulosFinal.length === 0) return;
 
             const newRule = {
               id: uuid(),
@@ -5447,12 +5859,14 @@
               matchType,
               matchValue,
               condicao: matchValue,
+              acao: "Classificar",
               rotulo: rotulosFinal.join(", "),
               categoria: categoriasFinal.join(", "),
             };
             ensureLabelsTracked(rotulosFinal);
             ensureCategoriesTracked(categoriasFinal);
             state.ruleFormMatchValue = "";
+            state.ruleFormAction = "Classificar";
             state.ruleFormRotulos = [];
             state.ruleFormCategorias = [state.categories[0] || "Outro"];
             state.ruleFormRotuloDraft = "";
@@ -5490,6 +5904,10 @@
             state.openDeadlinePicker = null;
             changed = true;
           }
+          if (state.isFiltersOpen && !e.target.closest("[data-filters-root]")) {
+            state.isFiltersOpen = false;
+            changed = true;
+          }
           if (changed) render();
         });
 
@@ -5513,6 +5931,12 @@
               state.openPanelPickerType = null;
               state.openModalPickerType = null;
               state.pickerNewDraft = "";
+              render();
+              return;
+            }
+            if (state.isFiltersOpen) {
+              e.preventDefault();
+              state.isFiltersOpen = false;
               render();
               return;
             }
